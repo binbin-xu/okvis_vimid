@@ -116,6 +116,13 @@ void MultiFrame::setImage(size_t cameraIdx, const cv::Mat & image)
   frames_[cameraIdx].setImage(image);
 }
 
+// Set the frame image;
+void MultiFrame::setDepthImage(size_t cameraIdx, const cv::Mat & depthImage)
+{
+  OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range");
+  frames_[cameraIdx].setDepthImage(depthImage);
+}
+
 // Set the geometry
 void MultiFrame::setGeometry(
     size_t cameraIdx, std::shared_ptr<const cameras::CameraBase> cameraGeometry)
@@ -145,6 +152,13 @@ const cv::Mat & MultiFrame::image(size_t cameraIdx) const
 {
   OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range");
   return frames_[cameraIdx].image();
+}
+
+// Obtain the image
+const cv::Mat & MultiFrame::depthImage(size_t cameraIdx) const
+{
+  OKVIS_ASSERT_TRUE_DBG(Exception, cameraIdx < frames_.size(), "Out of range");
+  return frames_[cameraIdx].depthImage();
 }
 
 // get the base class geometry (will be slow to use)

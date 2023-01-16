@@ -111,6 +111,11 @@ class MultiFrame
   /// @param[in] image The image.
   inline void setImage(size_t cameraIdx, const cv::Mat & image);
 
+  /// \brief Set the frame depth image;
+  /// @param[in] cameraIdx The camera index that took the image.
+  /// @param[in] depthImage The depth image.
+  inline void setDepthImage(size_t cameraIdx, const cv::Mat & depthImage);
+
   /// \brief Set the geometry
   /// @param[in] cameraIdx The camera index.
   /// @param[in] cameraGeometry The camera geometry.
@@ -135,6 +140,11 @@ class MultiFrame
   /// @param[in] cameraIdx The camera index.
   /// \return The image.
   inline const cv::Mat & image(size_t cameraIdx) const;
+
+  /// \brief Obtain the depth image
+  /// @param[in] cameraIdx The camera index.
+  /// \return The image.
+  inline const cv::Mat & depthImage(size_t cameraIdx) const;
 
   /// \brief get the base class geometry (will be slow to use)
   /// @param[in] cameraIdx The camera index.

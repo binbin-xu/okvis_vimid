@@ -47,6 +47,7 @@
 #include <okvis/VioFrontendInterface.hpp>
 #include <okvis/timing/Timer.hpp>
 #include <okvis/DenseMatcher.hpp>
+// #include <okvis/TagDetector.hpp>
 
 /// \brief okvis Main namespace of this package.
 namespace okvis {
@@ -57,6 +58,7 @@ namespace okvis {
 class Frontend : public VioFrontendInterface {
  public:
   OKVIS_DEFINE_EXCEPTION(Exception, std::runtime_error)
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
 #ifdef DEACTIVATE_TIMERS
   typedef okvis::timing::DummyTimer TimerSwitchable;
@@ -88,7 +90,29 @@ class Frontend : public VioFrontendInterface {
   virtual bool detectAndDescribe(size_t cameraIndex,
                                  std::shared_ptr<okvis::MultiFrame> frameOut,
                                  const okvis::kinematics::Transformation& T_WC,
-                                 const std::vector<cv::KeyPoint> * keypoints);
+                                 const std::vector<cv::KeyPoint> * keypoints,
+                                 okvis::kinematics::Transformation * T_CT);
+
+  // /// Set target keypoints
+  // void setTargetKeypoints(Eigen::Matrix2Xd& keypointLocations) {
+  //   for(size_t i=0; i<tagDetectors_.size(); ++i)
+  //     tagDetectors_.at(i)->setTemplateKeypointLocations(keypointLocations);
+  // }
+
+  // /// Set target keypoints
+  // void setTargetSize(double targetSizeMetres) {
+  //   for (size_t i = 0; i < tagDetectors_.size(); ++i)
+  //     tagDetectors_.at(i)->setTemplateSize(targetSizeMetres);
+  // }
+
+  // /// \brief MBZIRC
+  // /// \return True, if individual keypoints were tracked
+  // bool trackDetectTarget(size_t cameraIndex, const cv::Mat & image, const okvis::Time & timestamp,
+  //                  const okvis::VioParameters & params,
+  //                  const okvis::kinematics::Transformation & T_CT_init,
+  //                  std::vector<std::pair<size_t,cv::Point2f>> & matches,
+  //                  okvis::kinematics::Transformation & T_CT,
+  //                  bool & successfulRedetection);
 
   /**
    * @brief Matching as well as initialization of landmarks and state.
@@ -376,7 +400,8 @@ class Frontend : public VioFrontendInterface {
    */
   template<class MATCHING_ALGORITHM>
   void matchStereo(okvis::Estimator& estimator,
-                   std::shared_ptr<okvis::MultiFrame> multiFrame);
+                   std::shared_ptr<okvis::MultiFrame> multiFrame,
+                   const okvis::VioParameters& params);
 
   /**
    * @brief Perform 3D/2D RANSAC.
@@ -411,6 +436,12 @@ class Frontend : public VioFrontendInterface {
 
   /// (re)instantiates feature detectors and descriptor extractors. Used after settings changed or at startup.
   void initialiseBriskFeatureDetectors();
+
+  // std::vector<std::shared_ptr<okvis::TagDetector>> tagDetectors_; ///< Tag detector.
+
+// // MBZIRC hack
+// public:
+//   cv::Mat debugImage;
 
 };
 

@@ -100,6 +100,12 @@ class VioParametersReader{
 
  protected:
 
+  /// @brief Struct that contains infos about an optional depth image.
+  struct DepthInfo {
+    bool hasDepth = false;
+    double baseline = 0.0;
+  };
+
   /// @brief Struct that contains all the camera calibration information.
   struct CameraCalibration {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -109,6 +115,9 @@ class VioParametersReader{
     Eigen::Vector2d focalLength;              ///< Focal length.
     Eigen::Vector2d principalPoint;           ///< Principal point.
     std::string distortionType;               ///< Distortion type. ('radialtangential' 'plumb_bob' 'equdistant')
+    bool okvis_use = true;
+    bool tracker_use = false;
+    DepthInfo depthInfo;
   };
 
   /// If readConfigFile() has been called at least once this is true

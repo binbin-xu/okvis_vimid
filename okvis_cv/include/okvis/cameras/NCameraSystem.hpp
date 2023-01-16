@@ -92,20 +92,30 @@ class NCameraSystem
   /// @param[in] cameraGeometries a vector of camera geometries (same length as T_SC).
   /// @param[in] distortionTypes a vector of distortion types (same length as T_SC).
   /// @param[in] computeOverlaps Indicate, if the overlap computation (can take a while) should be performed.
+  /// @param[in] isDepthCamera Is it a depth camera?
+  /// @param[in] isVirtual Is it a virtual camera generated from depth camera keypoints?
+  /// @param[in] virtualCameraIdx If it's a depth cam, what is the corresponding virtual camera index?
   inline void reset(const std::vector<std::shared_ptr<const okvis::kinematics::Transformation>> & T_SC,
                     const std::vector<std::shared_ptr<const cameras::CameraBase>> & cameraGeometries,
                     const std::vector<DistortionType>& distortionTypes,
-                    bool computeOverlaps);
+                    bool computeOverlaps,
+                    const std::vector<bool> & isDepthCamera = std::vector<bool>(),
+                    const std::vector<bool> & isVirtual = std::vector<bool>(),
+                    const std::vector<int> & virtualCameraIdx = std::vector<int>());
 
   /// \brief Append with a single camera.
   /// @param[in] T_SC extrinsics.
   /// @param[in] cameraGeometry Camera geometry.
   /// @param[in] distortionType Distortion type.
   /// @param[in] computeOverlaps Indicate, if the overlap computation (can take a while) should be performed.
+  /// @param[in] isDepthCamera Is it a depth camera? If true, inserts a virtual depth camera at depthCamerBaseline.
+  /// @param[in] depthCamerBaseline If depth camera, use this as a baseline to construct a virtual camera.
   inline void addCamera(std::shared_ptr<const okvis::kinematics::Transformation> T_SC,
                         std::shared_ptr<const cameras::CameraBase> cameraGeometry,
                         DistortionType distortionType,
-                        bool computeOverlaps = true);
+                        bool computeOverlaps = true,
+                        bool isDepthCamera = false,
+                        double depthCamerBaseline = 0.0);
 
   /// \brief Obtatin the number of cameras currently added.
   /// @return The number of cameras.
@@ -143,6 +153,21 @@ class NCameraSystem
   /// @return True, if there is at least one pixel of overlap.
   inline bool hasOverlap(size_t cameraIndexSeenBy, size_t cameraIndex) const;
 
+  /// \brief Is it a depth camera?
+  inline bool isDepthCamera(size_t cameraIndex) const {
+    return isDepthCamera_.at(cameraIndex);
+  }
+
+  /// \brief Is it a virtual camera generated from depth camera keypoints?
+  inline bool isVirtual(size_t cameraIndex) const {
+    return isVirtual_.at(cameraIndex);
+  }
+
+  /// \brief If it's a depth cam, what is the corresponding virtual camera index?
+  inline int virtualCameraIdx(size_t cameraIndex) const {
+    return virtualCameraIdx_.at(cameraIndex);
+  }
+
  protected:
   /// \brief Use this to check overlapMats_ and overlaps_ have correct sizes
   /// @return True, if valid.
@@ -152,6 +177,9 @@ class NCameraSystem
   std::vector<DistortionType> distortionTypes_;
   std::vector<std::vector<cv::Mat>> overlapMats_;  ///< Overlaps between cameras: mats
   std::vector<std::vector<bool>> overlaps_;  ///< Overlaps between cameras: binary
+  std::vector<bool> isDepthCamera_; ///< is it a depth camera?
+  std::vector<bool> isVirtual_; ///< is it a virtual camera generated from depth camera keypoints?
+  std::vector<int>  virtualCameraIdx_; ///< if it's a depth cam, what is the corresponding virtual camera index?
 };
 
 }  // namespace cameras

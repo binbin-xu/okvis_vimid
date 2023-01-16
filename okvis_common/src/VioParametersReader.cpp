@@ -201,6 +201,14 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
         << vioParameters_.sensors_information.frameTimestampTolerance;
   }
 
+  // MBZIRC target size
+  if (file["target_size_metres"].isReal()) {
+    file["target_size_metres"] >> vioParameters_.targetSizeMetres;
+  } else {
+    LOG(WARNING) << "MBZIRC target size not specified, setting 1.5m";
+    vioParameters_.targetSizeMetres = 1.5;
+  }
+
   // camera params
   if (file["camera_params"]["sigma_absolute_translation"].isReal()) {
     file["camera_params"]["sigma_absolute_translation"]
@@ -299,9 +307,24 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
       vioParameters_.publishing.velocitiesFrame=FrameName::S;
     else if (frame.compare("Wc") == 0)
       vioParameters_.publishing.velocitiesFrame=FrameName::Wc;
+    else if (frame.compare("G") == 0)
+      vioParameters_.publishing.velocitiesFrame=FrameName::G;
     else {
       LOG(WARNING) << frame << " unknown/invalid frame for velocitiesFrame, setting to Wc";
       vioParameters_.publishing.velocitiesFrame=FrameName::Wc;
+    }
+  }
+  if (file["publishing_options"]["referenceFrame"].isString()) {
+    std::string frame = (std::string)file["publishing_options"]["referenceFrame"];
+    // cut out first word. str currently contains everything including comments
+    frame = frame.substr(0, frame.find(" "));
+    if (frame.compare("Wc") == 0)
+      vioParameters_.publishing.referenceFrame=FrameName::Wc;
+    else if (frame.compare("G") == 0)
+      vioParameters_.publishing.referenceFrame=FrameName::G;
+    else {
+      LOG(WARNING) << frame << " unknown/invalid frame for referenceFrame, setting to Wc";
+      vioParameters_.publishing.referenceFrame=FrameName::Wc;
     }
   }
 
@@ -316,12 +339,9 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
     std::shared_ptr<const okvis::kinematics::Transformation> T_SC_okvis_ptr(
           new okvis::kinematics::Transformation(calibrations[i].T_SC.r(),
                                                 calibrations[i].T_SC.q().normalized()));
-
     if (strcmp(calibrations[i].distortionType.c_str(), "equidistant") == 0) {
-      vioParameters_.nCameraSystem.addCamera(
-          T_SC_okvis_ptr,
-          std::shared_ptr<const okvis::cameras::CameraBase>(
-              new okvis::cameras::PinholeCamera<
+      std::shared_ptr<okvis::cameras::PinholeCamera<okvis::cameras::EquidistantDistortion>> cam;
+      cam.reset(new okvis::cameras::PinholeCamera<
                   okvis::cameras::EquidistantDistortion>(
                   calibrations[i].imageDimension[0],
                   calibrations[i].imageDimension[1],
@@ -333,18 +353,35 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
                     calibrations[i].distortionCoefficients[0],
                     calibrations[i].distortionCoefficients[1],
                     calibrations[i].distortionCoefficients[2],
-                    calibrations[i].distortionCoefficients[3])/*, id ?*/)),
-          okvis::cameras::NCameraSystem::Equidistant/*, computeOverlaps ?*/);
-      std::stringstream s;
-      s << calibrations[i].T_SC.T();
-      LOG(INFO) << "Equidistant pinhole camera " << camIdx
-                << " with T_SC=\n" << s.str();
+                    calibrations[i].distortionCoefficients[3])/*, id ?*/));
+      cam->initialiseUndistortMaps(); // set up undistorters
+      if(calibrations[i].okvis_use){
+        vioParameters_.nCameraSystem.addCamera(
+            T_SC_okvis_ptr,
+            std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+            okvis::cameras::NCameraSystem::Equidistant, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Equidistant pinhole camera " << camIdx
+                  << " with T_SC=\n" << s.str();
+      }
+      if(calibrations[i].tracker_use){
+            vioParameters_.trackerNCameraSystem.addCamera(T_SC_okvis_ptr,
+            std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+            okvis::cameras::NCameraSystem::Equidistant, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Equidistant pinhole TRACKER camera " << camIdx
+                  << " with T_SC=\n" << s.str();
+      }
     } else if (strcmp(calibrations[i].distortionType.c_str(), "radialtangential") == 0
                || strcmp(calibrations[i].distortionType.c_str(), "plumb_bob") == 0) {
-      vioParameters_.nCameraSystem.addCamera(
-          T_SC_okvis_ptr,
-          std::shared_ptr<const okvis::cameras::CameraBase>(
-              new okvis::cameras::PinholeCamera<
+      std::shared_ptr<okvis::cameras::PinholeCamera<okvis::cameras::RadialTangentialDistortion>> cam;
+      cam.reset(new okvis::cameras::PinholeCamera<
                   okvis::cameras::RadialTangentialDistortion>(
                   calibrations[i].imageDimension[0],
                   calibrations[i].imageDimension[1],
@@ -356,19 +393,36 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
                     calibrations[i].distortionCoefficients[0],
                     calibrations[i].distortionCoefficients[1],
                     calibrations[i].distortionCoefficients[2],
-                    calibrations[i].distortionCoefficients[3])/*, id ?*/)),
-          okvis::cameras::NCameraSystem::RadialTangential/*, computeOverlaps ?*/);
-      std::stringstream s;
-      s << calibrations[i].T_SC.T();
-      LOG(INFO) << "Radial tangential pinhole camera " << camIdx
-                << " with T_SC=\n" << s.str();
+                    calibrations[i].distortionCoefficients[3])/*, id ?*/));
+      cam->initialiseUndistortMaps(); // set up undistorters
+      if(calibrations[i].okvis_use){
+        vioParameters_.nCameraSystem.addCamera(
+            T_SC_okvis_ptr,
+            std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+            okvis::cameras::NCameraSystem::RadialTangential, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Radial tangential pinhole camera " << camIdx
+                  << " with T_SC=\n" << s.str();
+      }
+      if(calibrations[i].tracker_use){
+        vioParameters_.trackerNCameraSystem.addCamera(
+            T_SC_okvis_ptr,
+            std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+            okvis::cameras::NCameraSystem::RadialTangential, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Radial tangential pinhole TRACKER camera " << camIdx
+                  << " with T_SC=\n" << s.str();
+      }
     } else if (strcmp(calibrations[i].distortionType.c_str(), "radialtangential8") == 0
                || strcmp(calibrations[i].distortionType.c_str(), "plumb_bob8") == 0) {
-      vioParameters_.nCameraSystem.addCamera(
-          T_SC_okvis_ptr,
-          std::shared_ptr<const okvis::cameras::CameraBase>(
-              new okvis::cameras::PinholeCamera<
-                  okvis::cameras::RadialTangentialDistortion8>(
+      std::shared_ptr<okvis::cameras::PinholeCamera<okvis::cameras::RadialTangentialDistortion8>> cam;
+      cam.reset(new okvis::cameras::PinholeCamera<okvis::cameras::RadialTangentialDistortion8>(
                   calibrations[i].imageDimension[0],
                   calibrations[i].imageDimension[1],
                   calibrations[i].focalLength[0],
@@ -383,12 +437,32 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
                     calibrations[i].distortionCoefficients[4],
                     calibrations[i].distortionCoefficients[5],
                     calibrations[i].distortionCoefficients[6],
-                    calibrations[i].distortionCoefficients[7])/*, id ?*/)),
-          okvis::cameras::NCameraSystem::RadialTangential8/*, computeOverlaps ?*/);
-      std::stringstream s;
-      s << calibrations[i].T_SC.T();
-      LOG(INFO) << "Radial tangential 8 pinhole camera " << camIdx
-                << " with T_SC=\n" << s.str();
+                    calibrations[i].distortionCoefficients[7])/*, id ?*/));
+      cam->initialiseUndistortMaps(); // set up undistorters
+      if(calibrations[i].okvis_use){
+        vioParameters_.nCameraSystem.addCamera(
+            T_SC_okvis_ptr,
+            std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+            okvis::cameras::NCameraSystem::RadialTangential8, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Radial tangential 8 pinhole camera " << camIdx
+                  << " with T_SC=\n" << s.str();
+      }
+      if(calibrations[i].tracker_use){
+        vioParameters_.trackerNCameraSystem.addCamera(
+           T_SC_okvis_ptr,
+           std::static_pointer_cast<const okvis::cameras::CameraBase>(cam),
+           okvis::cameras::NCameraSystem::RadialTangential8, true,
+            calibrations[i].depthInfo.hasDepth,
+            calibrations[i].depthInfo.baseline);
+        std::stringstream s;
+        s << calibrations[i].T_SC.T();
+        LOG(INFO) << "Radial tangential 8 pinhole TRACKER camera " << camIdx
+                 << " with T_SC=\n" << s.str();
+      }
     } else {
       LOG(ERROR) << "unrecognized distortion type " << calibrations[i].distortionType;
     }
@@ -462,6 +536,36 @@ void VioParametersReader::readConfigFile(const std::string& filename) {
   vioParameters_.imu.a0 = Eigen::Vector3d((double) (imu_params["a0"][0]),
                                           (double) (imu_params["a0"][1]),
                                           (double) (imu_params["a0"][2]));
+  // GPS
+
+  if (file["gps"]["antenna_offset_S"].isSeq()) {
+    cv::FileNode antennaOffset = file["gps"]["antenna_offset_S"];
+    vioParameters_.gps.antennaOffset << antennaOffset[0], antennaOffset[1], antennaOffset[2];
+    vioParameters_.gps.use = true;
+  } else {
+    vioParameters_.gps.use = false;
+  }
+  if (file["gps"]["lat0"].isReal()) {
+    cv::FileNode lat0 = file["gps"]["lat0"];
+    vioParameters_.gps.lat0 = lat0;
+    vioParameters_.gps.use = true;
+  } else {
+    vioParameters_.gps.use = false;
+  }
+  if (file["gps"]["lon0"].isReal()) {
+    cv::FileNode lon0 = file["gps"]["lon0"];
+    vioParameters_.gps.lon0 = lon0;
+    vioParameters_.gps.use = true;
+  } else {
+    vioParameters_.gps.use = false;
+  }
+  if (file["gps"]["alt0"].isReal()) {
+    cv::FileNode lon0 = file["gps"]["alt0"];
+    vioParameters_.gps.alt0 = lon0;
+    vioParameters_.gps.use = true;
+  } else {
+    vioParameters_.gps.use = false;
+  }
 
   readConfigFile_ = true;
 }
@@ -589,6 +693,16 @@ bool VioParametersReader::getCalibrationViaConfig(
       calib.focalLength << focalLengthNode[0], focalLengthNode[1];
       calib.principalPoint << principalPointNode[0], principalPointNode[1];
       calib.distortionType = (std::string)((*it)["distortion_type"]);
+
+      // info about usage
+      parseBoolean((*it)["okvis_use"], calib.okvis_use);
+      parseBoolean((*it)["tracker_use"], calib.tracker_use);
+
+      // parse depth info
+      if((*it)["depth_baseline"].isReal()){
+        calib.depthInfo.hasDepth = true;
+        (*it)["depth_baseline"] >> calib.depthInfo.baseline;
+      }
 
       calibrations.push_back(calib);
     }

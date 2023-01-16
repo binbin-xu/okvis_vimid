@@ -122,17 +122,15 @@ struct DepthCameraData {
 struct PositionReading {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Vector3d position;           ///< Position measurement.
-  Eigen::Vector3d positionOffset;     ///< Position offset.
   Eigen::Matrix3d positionCovariance; ///< Measurement covariance.
 };
 
 /// \brief GPS position measurement.
 struct GpsPositionReading {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  double lat_wgs84;   ///< Latitude in WGS84 coordinate system.
-  double lon_wgs84;   ///< Longitude in WGS84 coordiante system.
-  double alt_wgs84;   ///< Altitude in WGS84 coordinate system.
-  double geoidSeparation; ///< Separation between geoid (MSL) and WGS-84 ellipsoid. [m]
+  double lat_wgs84;   ///< Latitude in WGS84 coordinate system [deg].
+  double lon_wgs84;   ///< Longitude in WGS84 coordiante system [deg].
+  double alt_wgs84;   ///< Altitude in WGS84 coordinate system [m].
   Eigen::Matrix3d positionCovarianceENU; ///< Measurement covariance. East/North/Up.
 };
 
@@ -164,6 +162,7 @@ typedef std::deque<ImuMeasurement, Eigen::aligned_allocator<ImuMeasurement> > Im
 /// \brief Camera measurement.
 struct CameraData {
   cv::Mat image;  ///< Image.
+  cv::Mat depthImage;  ///< Image.
   std::vector<cv::KeyPoint> keypoints; ///< Keypoints if available.
   bool deliversKeypoints; ///< Are the keypoints delivered too?
 };

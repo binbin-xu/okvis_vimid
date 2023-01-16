@@ -78,8 +78,10 @@ NCameraSystem::~NCameraSystem()
 void NCameraSystem::reset(
     const std::vector<std::shared_ptr<const okvis::kinematics::Transformation>> & T_SC,
     const std::vector<std::shared_ptr<const cameras::CameraBase>> & cameraGeometries,
-    const std::vector<DistortionType>& distortionTypes,
-    bool computeOverlaps)
+    const std::vector<DistortionType>& distortionTypes, bool computeOverlaps,
+    const std::vector<bool> & isDepthCamera,
+    const std::vector<bool> & isVirtual,
+    const std::vector<int> & virtualCameraIdx)
 {
   OKVIS_ASSERT_TRUE_DBG(
       Exception, T_SC.size() == cameraGeometries.size(),
@@ -91,6 +93,15 @@ void NCameraSystem::reset(
   T_SC_ = T_SC;
   cameraGeometries_ = cameraGeometries;
   distortionTypes_ = distortionTypes;
+  if(isDepthCamera.size() == 0) {
+    isDepthCamera_ = std::vector<bool>(distortionTypes_.size(), false);
+    isVirtual_ = std::vector<bool>(distortionTypes_.size(), false);
+    virtualCameraIdx_ = std::vector<int>(distortionTypes_.size(), -1);
+  } else {
+    isDepthCamera_ = isDepthCamera;
+    isVirtual_ = isVirtual;
+    virtualCameraIdx_ = virtualCameraIdx;
+  }
 
   // recompute overlaps if requested
   if (computeOverlaps) {
@@ -103,11 +114,30 @@ void NCameraSystem::addCamera(
     std::shared_ptr<const okvis::kinematics::Transformation> T_SC,
     std::shared_ptr<const cameras::CameraBase> cameraGeometry,
     DistortionType distortionType,
-    bool computeOverlaps)
+    bool computeOverlaps,
+    bool isDepthCamera,
+    double depthCamerBaseline)
 {
   T_SC_.push_back(T_SC);
   cameraGeometries_.push_back(cameraGeometry);
   distortionTypes_.push_back(distortionType);
+  isDepthCamera_.push_back(isDepthCamera); ///< is it a depth camera?
+  isVirtual_.push_back(false); ///< is it a virtual camera generated from depth camera keypoints?
+  virtualCameraIdx_.push_back(isDepthCamera ? cameraGeometries_.size() : -1);
+
+  if(isDepthCamera) {
+    // create an additional virtual camera
+    okvis::kinematics::Transformation T_CCvirtual(
+        Eigen::Vector3d(depthCamerBaseline, 0, 0),
+        Eigen::Quaterniond::Identity());
+    okvis::kinematics::Transformation T_SCvirtual(*T_SC*T_CCvirtual);
+    T_SC_.push_back(std::shared_ptr<const okvis::kinematics::Transformation>(new okvis::kinematics::Transformation(T_SCvirtual)));
+    cameraGeometries_.push_back(cameraGeometry); // TODO: check if this is thread-safe.
+    distortionTypes_.push_back(distortionType);
+    isDepthCamera_.push_back(false);
+    isVirtual_.push_back(true);
+    virtualCameraIdx_.push_back(-1);
+  }
 
   // recompute overlaps if requested
   if (computeOverlaps) {

@@ -107,6 +107,14 @@ class ImuError :
            const okvis::ImuParameters & imuParameters, const okvis::Time& t_0,
            const okvis::Time& t_1);
 
+  /// \brief Append with measurements and parameters.
+  /// \@param[in] imuMeasurements All the IMU measurements.
+  /// \@param[in] t_1 End time.
+  int append(const okvis::kinematics::Transformation& T_WS,
+             const okvis::SpeedAndBias & speedAndBiases,
+             const okvis::ImuMeasurementDeque & imuMeasurements,
+             const okvis::Time& t_1);
+
   /**
    * @brief Propagates pose, speeds and biases with given IMU measurements.
    * @remark This can be used externally to perform propagation

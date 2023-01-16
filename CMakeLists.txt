@@ -17,6 +17,8 @@ option (BUILD_APPS
         "Builds a demo app (which requires boost)" ON) 
 option (BUILD_TESTS
         "Builds all gtests" OFF) 
+option (HAVE_LIBREALSENSE
+        "Use realsense zr300 as part of okvis" ON)
 SET(N_CORES 3 CACHE STRING "Using N number of cores for parallel build")
 
 # Offer the user the choice of overriding the installation directories
@@ -98,7 +100,30 @@ else()
   message(STATUS "libvisensor not found")
 endif()
 
-
+# This is optional until the first release of librealsense as a ROS package
+if(${HAVE_LIBREALSENSE})
+find_package(librealsense)
+# find_package(realsense)
+SET(CAMERA_DRIVER "realsense")
+# This should be removed once librealsense is a required component
+if(NOT librealsense_FOUND)
+    find_library(REALSENSE_LIB realsense)
+    if(NOT REALSENSE_LIB)
+        message(FATAL_ERROR "librealsense library not found")
+    endif()
+    message(STATUS "REALSENSE_LIB => ${REALSENSE_LIB}")
+    find_path(REALSENSE_INCLUDE_DIR
+        NAMES rs.h rsutil.h
+        PATHS /usr/include /usr/local/include
+        PATH_SUFFIXES librealsense)
+    message(STATUS "librealsense header files => ${REALSENSE_INCLUDE_DIR}")
+    if(REALSENSE_INCLUDE_DIR)
+        include_directories(${REALSENSE_INCLUDE_DIR})
+    else()
+        message(FATAL_ERROR "librealsense header files not found")
+    endif()
+endif()
+endif()
 
 # glog
 find_package(Glog REQUIRED)
@@ -330,6 +355,12 @@ if(BUILD_APPS)
     okvis_frontend 
     okvis_multisensor_processing
     pthread 
+    realsense
+    # librealsense
+    ${REALSENSE_INCLUDE_DIR}
+    ${librealsense_LIBRARIES}
+    ${Boost_LIBRARIES}
+
     ${Boost_LIBRARIES}
   )
   if(${VISENSORDRIVER_FOUND})

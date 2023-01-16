@@ -93,10 +93,22 @@ void VioInterface::setFullStateCallbackWithExtrinsics(
   fullStateCallbackWithExtrinsics_ = fullStateCallbackWithExtrinsics;
 }
 
+// Set the denseStereoCallback to be called every time a new state is estimated.
+void VioInterface::setDenseStereoCallback(
+      const DenseStereoCallback & denseStereoCallback) {
+  denseStereoCallback_ = denseStereoCallback;
+}
+
 // Set the fullStateCallbackWithExtrinsics to be called every time a new state is estimated.
 void VioInterface::setLandmarksCallback(
     const LandmarksCallback & landmarksCallback) {
   landmarksCallback_ = landmarksCallback;
+}
+
+// Set the fullStateCallbackWithExtrinsics to be called every time a new state is estimated.
+void VioInterface::setMarkerCallback(
+    const MarkerCallback & markerCallback) {
+  markerCallback_ = markerCallback;
 }
 
 // Set the blocking variable that indicates whether the addMeasurement() functions

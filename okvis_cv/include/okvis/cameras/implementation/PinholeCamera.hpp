@@ -53,7 +53,7 @@ PinholeCamera<DISTORTION_T>::PinholeCamera(int imageWidth,
                                            double imageCenterV,
                                            const distortion_t & distortion,
                                            uint64_t id)
-    : CameraBase(imageWidth, imageHeight, id),
+    : PinholeCameraBase(imageWidth, imageHeight, id),
     distortion_(distortion),
     fu_(focalLengthU),
     fv_(focalLengthV),
@@ -87,6 +87,107 @@ bool PinholeCamera<DISTORTION_T>::setIntrinsics(
   one_over_fu_ = 1.0 / fu_;  //< 1.0 / fu_
   one_over_fv_ = 1.0 / fv_;  //< 1.0 / fv_
   fu_over_fv_ = fu_ / fv_;  //< fu_ / fv_
+  return true;
+}
+
+// Initialise undistort maps to defaults
+template<class DISTORTION_T>
+bool PinholeCamera<DISTORTION_T>::initialiseUndistortMaps() {
+  const double f = (fu_ + fv_) * 0.5;
+  return initialiseUndistortMaps(imageWidth(), imageHeight(), f, f, 
+      double(imageWidth())*0.5+0.5, double(imageHeight())*0.5+0.5);
+}
+
+// Initialise undistort maps, provide custom parameters for the undistorted cam.
+template<class DISTORTION_T>
+bool PinholeCamera<DISTORTION_T>::initialiseUndistortMaps(
+    int undistortedImageWidth, int undistortedImageHeight, 
+    double undistortedFocalLengthU, double undistortedFocalLengthV, 
+    double undistortedImageCenterU, double undistortedImageCenterV) {
+
+  // store parameters
+  undistortedImageWidth_ = undistortedImageWidth;
+  undistortedImageHeight_ = undistortedImageHeight;
+  undistortedFocalLengthU_ = undistortedFocalLengthU;
+  undistortedFocalLengthV_ = undistortedFocalLengthV;
+  undistortedImageCenterU_ = undistortedImageCenterU;
+  undistortedImageCenterV_ = undistortedImageCenterV;
+
+  // some preparation of the actual and undistorted projections
+  Eigen::Matrix2d undistortedK_inv, actualK;
+  undistortedK_inv << 1.0/undistortedFocalLengthU, 0.0, 0.0, 1.0/undistortedFocalLengthV;
+  actualK << fu_, 0.0, 0.0, fv_;
+  Eigen::Vector2d actualCenter(cu_, cv_);
+  Eigen::Vector2d undistortedCenter(undistortedImageCenterU, undistortedImageCenterV);
+
+  // Create the maps and vectors for points
+  cv::Mat map_x(undistortedImageHeight, undistortedImageWidth, CV_32F);
+  cv::Mat map_y(undistortedImageHeight, undistortedImageWidth, CV_32F);
+  Eigen::Vector2d pixel, imgPlane, projectedPoint, distortedPoint, mappedPixel;
+  Eigen::Vector3d ray, rayTransformed;
+  Eigen::Vector4d hrayTransformed;
+  const double rayLength = 0.25;
+
+  for (unsigned int y = 0; y < undistortedImageHeight; y++) {
+
+    pixel(1) = y;
+
+    float *pmap_x = map_x.ptr<float>(y); // for the yth row in the map
+    float *pmap_y = map_y.ptr<float>(y);
+
+    for (unsigned int x = 0; x < undistortedImageWidth; x++) {
+
+      pixel(0) = x;
+
+      // Convert from pixels to image plane using ideal camera intrinsics
+      imgPlane = undistortedK_inv * (pixel - undistortedCenter);
+
+      // Shoot a ray through the (x,y) point
+      ray = rayLength * imgPlane.homogeneous();
+
+      // Transform that ray into the frame of the actual camera
+      hrayTransformed = /*T_LC * */ ray.homogeneous();
+      rayTransformed = hrayTransformed.hnormalized();
+
+      // Project the transformed ray into the actual camera
+      projectedPoint = rayTransformed.hnormalized();
+
+      // Apply the distortion model to the projection
+      distortion_.distort(projectedPoint,&distortedPoint);
+
+      // Apply the intrinsics model to get a pixel location
+      mappedPixel = (actualK * distortedPoint) + actualCenter;
+
+      // Assign that pixel location to the map
+      pmap_x[x] = mappedPixel(0); // assign a value to the (x,y) position in the map
+      pmap_y[x] = mappedPixel(1);
+
+    }
+  }
+
+  // Apply convertMaps for actual fast remapping later when calling undistortImage
+  cv::convertMaps(map_x, map_y, map_x_fast_, map_y_fast_, CV_16SC2);
+
+  return true;
+}
+
+// Get the model of the undistorted camera.
+template<class DISTORTION_T>
+PinholeCamera<NoDistortion> PinholeCamera<DISTORTION_T>::undistortedPinholeCamera()
+    const {
+  assert(map_x_fast_.cols !=0);
+  return PinholeCamera<NoDistortion>(undistortedImageWidth_, undistortedImageHeight_,
+      undistortedFocalLengthU_, undistortedFocalLengthV_,
+      undistortedImageCenterU_, undistortedImageCenterV_,
+      NoDistortion());
+}
+
+// Get undistorted image -- assumes initialiseUndistortMaps was called
+template<class DISTORTION_T>
+bool PinholeCamera<DISTORTION_T>::undistortImage(const cv::Mat & srcImg, 
+                                                 cv::Mat & destImg) const {
+  cv::remap(srcImg, destImg, map_x_fast_, map_y_fast_, 
+      cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar());
   return true;
 }
 

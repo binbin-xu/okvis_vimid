@@ -143,6 +143,10 @@ struct MagnetometerParameters{
 struct GpsParameters{
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Vector3d antennaOffset; ///< The position offset of the antenna in body (B) coordinates.
+  double lat0;
+  double lon0;
+  double alt0;
+  bool use=false;
 };
 
 /*!
@@ -260,7 +264,7 @@ struct Visualization {
   bool displayImages; ///< Display images?
 };
 
-enum class FrameName { B, S, W, Wc };
+enum class FrameName { B, S, W, Wc, G };
 
 /// @brief Some publishing parameters.
 struct PublishingParameters {
@@ -274,6 +278,7 @@ struct PublishingParameters {
   okvis::kinematics::Transformation T_Wc_W = okvis::kinematics::Transformation::Identity(); ///< Provide custom World frame Wc
   FrameName trackedBodyFrame = FrameName::B; ///< B or S, the frame of reference that will be expressed relative to the selected worldFrame Wc
   FrameName velocitiesFrame = FrameName::B; ///< B or S,  the frames in which the velocities of the selected trackedBodyFrame will be expressed in
+  FrameName referenceFrame = FrameName::Wc; ///< pose relative to this
 };
 
 /// @brief Struct to combine all parameters and settings.
@@ -284,6 +289,7 @@ struct VioParameters {
   SensorsInformation sensors_information; ///< Information on camera and IMU setup.
   ExtrinsicsEstimationParameters camera_extrinsics; ///< Camera extrinsic estimation parameters.
   okvis::cameras::NCameraSystem nCameraSystem;  ///< Camera configuration.
+  okvis::cameras::NCameraSystem trackerNCameraSystem;  ///< Tracker camera configuration.
   ImuParameters imu;  ///< IMU parameters
   MagnetometerParameters magnetometer;  ///< Magnetometer parameters.
   PositionSensorParameters position;  ///< Position sensor parameters.
@@ -294,6 +300,7 @@ struct VioParameters {
   DifferentialPressureSensorParameters differential; ///< Differential pressure sensor parameters.
   WindParameters wind;  ///< Wind parameters.
   PublishingParameters publishing; ///< Publishing parameters.
+  double targetSizeMetres = 0.0; ///< mbzirc
 };
 
 } // namespace okvis

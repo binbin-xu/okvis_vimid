@@ -60,6 +60,12 @@ void Frame::setImage(const cv::Mat & image)
   image_ = image;
 }
 
+// set the frame image;
+void Frame::setDepthImage(const cv::Mat & depthImage)
+{
+  depthImage_ = depthImage;
+}
+
 // set the geometry
 void Frame::setGeometry(std::shared_ptr<const cameras::CameraBase> cameraGeometry)
 {
@@ -82,6 +88,12 @@ void Frame::setExtractor(std::shared_ptr<cv::DescriptorExtractor> extractor)
 const cv::Mat & Frame::image() const
 {
   return image_;
+}
+
+// obtain the depth image
+const cv::Mat & Frame::depthImage() const
+{
+  return depthImage_;
 }
 
 // get the base class geometry (will be slow to use)

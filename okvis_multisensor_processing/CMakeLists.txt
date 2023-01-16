@@ -1,11 +1,6 @@
 cmake_minimum_required(VERSION 2.8.11)
 project(okvis_multisensor_processing)
 
-if(NOT DO_TIMING)
-  add_definitions(-DDEACTIVATE_TIMERS)
-  message(STATUS "Deactivating timers.")
-endif()
-
 # generate the configure header file
 configure_file(../cmake/okvisConfig.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/okvisConfig.hpp" @ONLY)
 message(STATUS ${CMAKE_CURRENT_BINARY_DIR}/okvisConfig.hpp)
@@ -13,10 +8,6 @@ message(STATUS ${CMAKE_CURRENT_BINARY_DIR}/okvisConfig.hpp)
 # require Eigen
 find_package( Eigen REQUIRED )
 include_directories(${EIGEN_INCLUDE_DIR}) 
-
-# require OpenCV
-find_package( OpenCV COMPONENTS core highgui imgproc features2d REQUIRED )
-include_directories(BEFORE ${OpenCV_INCLUDE_DIRS}) 
 
 add_library(${PROJECT_NAME}
   src/ThreadedKFVio.cpp
@@ -57,6 +48,9 @@ install(DIRECTORY include/ DESTINATION ${INSTALL_INCLUDE_DIR} COMPONENT dev FILE
 
 # testing
 if(BUILD_TESTS)
+  # require OpenCV
+  find_package( OpenCV REQUIRED )
+  include_directories(BEFORE ${OpenCV_INCLUDE_DIRS}) 
   if(APPLE)
     add_definitions(-DGTEST_HAS_TR1_TUPLE=1)
   else()
@@ -77,7 +71,7 @@ if(BUILD_TESTS)
       ${GMOCK_LIBRARY}  
       ${PROJECT_NAME}
       ${CERES_LIBRARIES}
-      ${OpenCV_LIBRARIES}
+      ${OpenCV_LIBS}
       pthread)
     add_test(test ${PROJECT_TEST_NAME} )
   endif(APPLE)

@@ -92,6 +92,10 @@ class Frame
   /// @param[in] image The image.
   inline void setImage(const cv::Mat & image);
 
+  /// \brief Set the frame depth image;
+  /// @param[in] depthImage The depth image.
+  inline void setDepthImage(const cv::Mat & depthImage);
+
   /// \brief Set the geometry
   /// @param[in] cameraGeometry The camera geometry.
   inline void setGeometry(std::shared_ptr<const cameras::CameraBase> cameraGeometry);
@@ -107,6 +111,10 @@ class Frame
   /// \brief Obtain the image
   /// \return The image.
   inline const cv::Mat & image() const;
+
+  /// \brief Obtain the depth image
+  /// \return The image.
+  inline const cv::Mat & depthImage() const;
 
   /// \brief get the base class geometry (will be slow to use)
   /// \return The camera geometry.
@@ -189,6 +197,7 @@ class Frame
 
  protected:
   cv::Mat image_;  ///< the image as OpenCV's matrix
+  cv::Mat depthImage_;  ///< the depth image as OpenCV's matrix
   std::shared_ptr<const cameras::CameraBase> cameraGeometry_;  ///< the camera geometry
   std::shared_ptr<cv::FeatureDetector> detector_;  ///< the detector
   std::shared_ptr<cv::DescriptorExtractor> extractor_;  ///< the extractor

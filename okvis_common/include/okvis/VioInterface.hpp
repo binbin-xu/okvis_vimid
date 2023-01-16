@@ -63,12 +63,13 @@ namespace okvis {
 /**
  * @brief An abstract base class for interfaces between Front- and Backend.
  */
-class VioInterface {
+class VioInterface
+{
  public:
   OKVIS_DEFINE_EXCEPTION(Exception,std::runtime_error)
 
   typedef std::function<
-  void(const okvis::Time &, const okvis::kinematics::Transformation &)> StateCallback;
+      void(const okvis::Time &, const okvis::kinematics::Transformation &)> StateCallback;
   typedef std::function<
       void(const okvis::Time &, const okvis::kinematics::Transformation &,
            const Eigen::Matrix<double, 9, 1> &,
@@ -81,10 +82,29 @@ class VioInterface {
           const Eigen::Matrix<double, 3, 1> &,
           const std::vector<okvis::kinematics::Transformation,
               Eigen::aligned_allocator<okvis::kinematics::Transformation> >&)> FullStateCallbackWithExtrinsics;
+
+  /// \brief A helper struct to get the full estimation window info for dense stereo.
+  struct FrameInfo {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    okvis::Time timestamp; ///< The timestamp [ns].
+    bool isKeyframe; ///< Indicates whether or not this is a keyframe.
+    okvis::kinematics::Transformation T_WS; ///< The pose.
+    std::vector<okvis::kinematics::Transformation,
+                Eigen::aligned_allocator<okvis::kinematics::Transformation> > T_SC_i; ///< The individual camera extrinsics.
+    std::vector<cv::Mat> images; ///< The images (per camera).
+    std::vector<cv::Mat> depthImages; ///< The depth images if available
+  };
+  typedef std::function<
+      void(const std::vector<FrameInfo,Eigen::aligned_allocator<FrameInfo> >&)> DenseStereoCallback;
+
   typedef Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> EigenImage;
+
   typedef std::function<
       void(const okvis::Time &, const okvis::MapPointVector &,
            const okvis::MapPointVector &)> LandmarksCallback;
+  typedef std::function<
+      void(const okvis::Time &, const okvis::kinematics::Transformation &,
+           const Eigen::Vector3d &, const Eigen::Vector3d &)> MarkerCallback;
 
   VioInterface();
   virtual ~VioInterface();
@@ -130,6 +150,7 @@ class VioInterface {
    * \param stamp        The image timestamp.
    * \param cameraIndex  The index of the camera that the image originates from.
    * \param image        The image.
+   * \param DepthImage   A depth image, if available [5000*mm].
    * \param keypoints    Optionally aready pass keypoints. This will skip the detection part.
    * \param asKeyframe   Use the new image as keyframe. Not implemented.
    * \warning The frame consumer loop does not support using existing keypoints yet.
@@ -138,8 +159,19 @@ class VioInterface {
    */
   virtual bool addImage(const okvis::Time & stamp, size_t cameraIndex,
                         const cv::Mat & image,
+                        const cv::Mat & depthImage = cv::Mat(),
                         const std::vector<cv::KeyPoint> * keypoints = 0,
                         bool* asKeyframe = 0) = 0;
+
+  /**
+   * \brief              Add a new image for target tracking.
+   * \param stamp        The image timestamp.
+   * \param cameraIndex  The index of the camera that the image originates from.
+   * \param image        The image.
+   * \return             Returns true normally. False, if the previous one has not been processed yet.
+   */
+  virtual bool addTrackingImage(const okvis::Time & stamp, size_t cameraIndex,
+                                const cv::Mat & image) = 0;
 
   /**
    * \brief             Add an abstracted image observation.
@@ -168,72 +200,75 @@ class VioInterface {
   /// \brief                      Add a position measurement.
   /// \warning Not Implemented.
   /*
-  /// \param stamp                The measurement timestamp
-  /// \param position             The position in world frame
-  /// \param positionCovariance   The position measurement covariance matrix.
-  */
+   /// \param stamp                The measurement timestamp
+   /// \param position             The position in world frame
+   /// \param positionCovariance   The position measurement covariance matrix.
+   */
   virtual void addPositionMeasurement(
       const okvis::Time & /*stamp*/, const Eigen::Vector3d & /*position*/,
-      const Eigen::Vector3d & /*positionOffset*/,
-      const Eigen::Matrix3d & /*positionCovariance*/) {
+      const Eigen::Matrix3d & /*positionCovariance*/)
+  {
     OKVIS_THROW(Exception, "not implemented");
   }
 
   /// \brief                       Add a position measurement.
   /// \warning Not Implemented.
   /*
-  /// \param stamp                 The measurement timestamp
-  /// \param lat_wgs84_deg         WGS84 latitude [deg]
-  /// \param lon_wgs84_deg         WGS84 longitude [deg]
-  /// \param alt_wgs84_deg         WGS84 altitude [m]
-  /// \param positionOffset        Body frame antenna position offset [m]
-  /// \param positionCovarianceENU The position measurement covariance matrix.
-  */
-  virtual void addGpsMeasurement(
-      const okvis::Time & /*stamp*/, double /*lat_wgs84_deg*/,
-      double /*lon_wgs84_deg*/, double /*alt_wgs84_deg*/,
-      const Eigen::Vector3d & /*positionOffset*/,
-      const Eigen::Matrix3d & /*positionCovarianceENU*/) {
-    OKVIS_THROW(Exception, "not implemented");
-  }
+   /// \param stamp                 The measurement timestamp
+   /// \param lat_wgs84_deg         WGS84 latitude [deg]
+   /// \param lon_wgs84_deg         WGS84 longitude [deg]
+   /// \param alt_wgs84_deg         WGS84 altitude [m]
+   /// \param positionOffset        Body frame antenna position offset [m]
+   /// \param positionCovarianceENU The position measurement covariance matrix.
+   */
+  // virtual void addGpsMeasurement(
+  //     const okvis::Time & /*stamp*/, double /*lat_wgs84_deg*/,
+  //     double /*lon_wgs84_deg*/, double /*alt_wgs84_deg*/,
+  //     const Eigen::Matrix3d & /*positionCovarianceENU*/)
+  // {
+  //   OKVIS_THROW(Exception, "not implemented");
+  // }
 
   /// \brief                      Add a magnetometer measurement.
   /// \warning Not Implemented.
   /*
-  /// \param stamp                The measurement timestamp
-  /// \param fluxDensityMeas      Measured magnetic flux density (sensor frame) [uT]
-  /// \param stdev                Measurement std deviation [uT]
-  */
+   /// \param stamp                The measurement timestamp
+   /// \param fluxDensityMeas      Measured magnetic flux density (sensor frame) [uT]
+   /// \param stdev                Measurement std deviation [uT]
+   */
   /// \return                     Returns true normally. False, if the previous one has not been processed yet.
   virtual void addMagnetometerMeasurement(
       const okvis::Time & /*stamp*/,
-      const Eigen::Vector3d & /*fluxDensityMeas*/, double /*stdev*/) {
+      const Eigen::Vector3d & /*fluxDensityMeas*/, double /*stdev*/)
+  {
     OKVIS_THROW(Exception, "not implemented");
   }
 
   /// \brief                      Add a static pressure measurement.
   /// \warning Not Implemented.
   /*
-  /// \param stamp                The measurement timestamp
-  /// \param staticPressure       Measured static pressure [Pa]
-  /// \param stdev                Measurement std deviation [Pa]
-  */
+   /// \param stamp                The measurement timestamp
+   /// \param staticPressure       Measured static pressure [Pa]
+   /// \param stdev                Measurement std deviation [Pa]
+   */
   virtual void addBarometerMeasurement(const okvis::Time & /*stamp*/,
                                        double /*staticPressure*/,
-                                       double /*stdev*/) {
+                                       double /*stdev*/)
+  {
     OKVIS_THROW(Exception, "not implemented");
   }
 
   /// \brief                      Add a differential pressure measurement.
   /// \warning Not Implemented.
   /*
-  /// \param stamp                The measurement timestamp
-  /// \param differentialPressure Measured differential pressure [Pa]
-  /// \param stdev                Measurement std deviation [Pa]
-  */
+   /// \param stamp                The measurement timestamp
+   /// \param differentialPressure Measured differential pressure [Pa]
+   /// \param stdev                Measurement std deviation [Pa]
+   */
   virtual void addDifferentialPressureMeasurement(
       const okvis::Time & /*stamp*/, double /*differentialPressure*/,
-      double /*stdev*/) {
+      double /*stdev*/)
+  {
     OKVIS_THROW(Exception, "not implemented");
   }
 
@@ -281,6 +316,13 @@ class VioInterface {
   virtual void setFullStateCallbackWithExtrinsics(
       const FullStateCallbackWithExtrinsics & fullStateCallbackWithExtrinsics);
 
+  /// \brief Set the denseStereoCallback to be called every time a new state is estimated.
+  ///        When an implementing class has an estimate, they can call:
+  ///        denseStereoCallback_( frameInfos );
+  ///        frameInfos is an std::vector of FrameInfo.
+  virtual void setDenseStereoCallback(
+      const DenseStereoCallback & denseStereoCallback);
+
   /// \brief Set the landmarksCallback to be called every time a new state is estimated.
   ///        When an implementing class has an estimate, they can call:
   ///        landmarksCallback_( stamp, landmarksVector );
@@ -288,6 +330,13 @@ class VioInterface {
   ///        landmarksVector contains all 3D-landmarks with id.
   virtual void setLandmarksCallback(
       const LandmarksCallback & landmarksCallback);
+
+  /// \brief Set the markerCallback to be called every time a new state is estimated.
+  ///        When an implementing class has an estimate, they can call:
+  ///        landmarksCallback_( stamp, landmarksVector );
+  ///        where stamp is the timestamp
+  ///        landmarksVector contains all 3D-landmarks with id.
+  virtual void setMarkerCallback(const MarkerCallback & markerCallback);
 
   /**
    * \brief Set the blocking variable that indicates whether the addMeasurement() functions
@@ -311,13 +360,16 @@ class VioInterface {
   StateCallback stateCallback_; ///< State callback function.
   FullStateCallback fullStateCallback_; ///< Full state callback function.
   FullStateCallbackWithExtrinsics fullStateCallbackWithExtrinsics_; ///< Full state and extrinsics callback function.
+  DenseStereoCallback denseStereoCallback_; ///< The callback usable for dense stereo mapping.
   LandmarksCallback landmarksCallback_; ///< Landmarks callback function.
+  MarkerCallback markerCallback_;  ///< Marker callback function.
+
   std::shared_ptr<std::fstream> csvImuFile_;  ///< IMU CSV file.
   std::shared_ptr<std::fstream> csvPosFile_;  ///< Position CSV File.
   std::shared_ptr<std::fstream> csvMagFile_;  ///< Magnetometer CSV File
   typedef std::map<size_t, std::shared_ptr<std::fstream>> FilePtrMap;
-  FilePtrMap csvTracksFiles_; ///< Tracks CSV Files.
-  bool blocking_; ///< Blocking option. Whether the addMeasurement() functions should wait until proccessing is complete.
+  FilePtrMap csvTracksFiles_;  ///< Tracks CSV Files.
+  bool blocking_;  ///< Blocking option. Whether the addMeasurement() functions should wait until proccessing is complete.
 };
 
 }  // namespace okvis

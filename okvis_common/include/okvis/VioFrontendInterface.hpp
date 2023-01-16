@@ -88,7 +88,8 @@ class VioFrontendInterface {
   virtual bool detectAndDescribe(
       size_t cameraIndex, std::shared_ptr<okvis::MultiFrame> frameOut,
       const okvis::kinematics::Transformation& T_WC,
-      const std::vector<cv::KeyPoint> * keypoints) = 0;
+      const std::vector<cv::KeyPoint> * keypoints,
+      okvis::kinematics::Transformation * T_CT) = 0;
 
   /**
    * @brief Matching as well as initialization of landmarks and state.

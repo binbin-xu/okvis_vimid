@@ -45,6 +45,7 @@
 #include <mutex>
 #include <array>
 
+#include <GeographicLib/LocalCartesian.hpp>
 #include <ceres/ceres.h>
 #include <okvis/kinematics/Transformation.hpp>
 
@@ -111,6 +112,22 @@ class Estimator : public VioBackendInterface
   int addImu(const okvis::ImuParameters & imuParameters);
 
   /**
+   * @brief Add a position sensor to the configuration.
+   * @warning Currently there is only one GPS supported.
+   * @param postionSensorParameters The position sensor parameters.
+   * @return index of position sensor.
+   */
+  int addGpsPositionSensor(const okvis::PositionSensorParameters & positionSensorParameters);
+
+  /**
+   * @brief Add a GPS to the configuration.
+   * @warning Currently there is only one GPS supported.
+   * @param gpsParameters The GPS parameters.
+   * @return index of GPS.
+   */
+  int addGps(const okvis::GpsParameters & gpsParameters);
+
+  /**
    * @brief Remove all cameras from the configuration
    */
   void clearCameras();
@@ -119,6 +136,11 @@ class Estimator : public VioBackendInterface
    * @brief Remove all IMUs from the configuration.
    */
   void clearImus();
+
+  /**
+   * @brief Remove all GPSs from the configuration.
+   */
+  void clearGpss();
 
   /// @}
 
@@ -171,6 +193,38 @@ class Estimator : public VioBackendInterface
    */
   bool removeObservation(uint64_t landmarkId, uint64_t poseId,  size_t camIdx,
                          size_t keypointIdx);
+
+  // /**
+  //  * \brief                      Add a position measurement.
+  //  * \warning                    Experimental.
+  //  * \param stamp                The measurement timestamp.
+  //  * \param position             The position in world frame.
+  //  * \param positionCovariance   The position measurement covariance matrix.
+  //  * \return True on success.
+  //  */
+  // virtual bool addPositionMeasurement(
+  //     const okvis::Time & stamp, const Eigen::Vector3d & position,
+  //     const Eigen::Matrix3d & positionCovariance);
+
+  // /**
+  //  * \brief                       Add a GPS measurement.
+  //  * \warning Experimental.
+  //  * \param stamp                 The measurement timestamp.
+  //  * \param lat_wgs84_deg         WGS84 latitude [deg].
+  //  * \param lon_wgs84_deg         WGS84 longitude [deg].
+  //  * \param alt_wgs84             WGS84 altitude [m].
+  //  * \param positionCovarianceENU The position measurement covariance matrix.
+  //  */
+  // virtual bool addGpsMeasurement(const okvis::Time & stamp,
+  //                                double lat_wgs84_deg, double lon_wgs84_deg,
+  //                                double alt_wgs84,
+  //                                const Eigen::Matrix3d & positionCovarianceENU);
+
+  // bool addTargetMeasurement(int targetId, uint64_t poseId, size_t camIdx, 
+  //                           const okvis::kinematics::Transformation &T_SCi,
+  //                           const cameras::PinholeCamera<cameras::NoDistortion> & camera,
+  //                           const std::vector<std::pair<size_t,cv::Point2f>> & matches,
+  //                           const okvis::kinematics::Transformation *T_CT = nullptr);
 
   /**
    * @brief Applies the dropping/marginalization strategy according to the RSS'13/IJRR'14 paper.
@@ -274,6 +328,27 @@ class Estimator : public VioBackendInterface
    */
   bool get_T_WS(uint64_t poseId, okvis::kinematics::Transformation & T_WS) const;
 
+  /**
+   * @brief Get tracked target pose for a given pose ID.
+   * @param[in]  poseId ID of desired pose.
+   * @param[in]  targetId ID of marker.
+   * @param[out] T_WS Homogeneous transformation of this pose.
+   * @param[out] v_W The velocity in W-frame
+   * @param[out] v_W The rotational velocity in W-frame
+   * @return True if successful.
+   */
+  bool get_T_WT(uint64_t poseId, uint64_t targetId, okvis::kinematics::Transformation & T_WS,
+                Eigen::Vector3d & v_W, Eigen::Vector3d & omega_W, double & velocityUncertainty) const;
+
+  /// Set target keypoints
+  void setTargetKeypoints(Eigen::Matrix2Xd& keypointLocations) {
+    keypointLocations_ = keypointLocations;
+  }
+
+  /// Get the predicted target pose at time stamp.
+  /// \return False, if last update more than 2 seconds ago.
+  bool getPredictedTargetState(const okvis::Time & stamp, kinematics::Transformation & T_WT) const;
+
   // the following access the optimization graph, so are not very fast.
   // Feel free to implement caching for them...
   /**
@@ -285,6 +360,11 @@ class Estimator : public VioBackendInterface
    * @return True if successful.
    */
   bool getSpeedAndBias(uint64_t poseId, uint64_t imuIdx, okvis::SpeedAndBias & speedAndBias) const;
+
+  /**
+   * @brief Get the GPS frame to World frame alignment.
+   */
+  bool get_T_GW(uint64_t /*poseId*/, okvis::kinematics::Transformation & T_GW) const;
 
   /**
    * @brief Get camera states for a given pose ID.
@@ -547,9 +627,12 @@ class Estimator : public VioBackendInterface
     GlobalStatesContainer global;
     AllSensorStatesContainer sensors;
     bool isKeyframe;
+    bool isUnremovable=false;
     uint64_t id;
     okvis::Time timestamp;
   };
+
+  void predictTarget(double dt);
 
   // the following keeps track of all the states at different time instances (key=poseId)
   std::map<uint64_t, States> statesMap_; ///< Buffer for currently considered states.
@@ -567,6 +650,9 @@ class Estimator : public VioBackendInterface
   std::vector<okvis::ExtrinsicsEstimationParameters,
       Eigen::aligned_allocator<okvis::ExtrinsicsEstimationParameters> > extrinsicsEstimationParametersVec_; ///< Extrinsics parameters.
   std::vector<okvis::ImuParameters, Eigen::aligned_allocator<okvis::ImuParameters> > imuParametersVec_; ///< IMU parameters.
+  std::vector<okvis::PositionSensorParameters, Eigen::aligned_allocator<okvis::PositionSensorParameters> > positionSensorParametersVec_; ///< Position sensor parameters.
+  std::vector<okvis::GpsParameters, Eigen::aligned_allocator<okvis::GpsParameters> > gpsParametersVec_; ///< GPS parameters.
+  GeographicLib::LocalCartesian localCartesian_;
 
   // loss function for reprojection errors
   std::shared_ptr< ::ceres::LossFunction> cauchyLossFunctionPtr_; ///< Cauchy loss.
@@ -578,6 +664,27 @@ class Estimator : public VioBackendInterface
 
   // ceres iteration callback object
   std::unique_ptr<okvis::ceres::CeresIterationCallback> ceresCallback_; ///< Maybe there was a callback registered, store it here.
+
+  okvis::kinematics::Transformation T_WT_; ///< Tracked target pose.
+  Eigen::Vector3d v_WT_W_ = Eigen::Vector3d::Zero();  ///< Tracked target linear velocity.
+  Eigen::Matrix<double,9,9> P_T_ = Eigen::Matrix<double,9,9>::Identity(); ///< tracked target covariance matrix.
+  okvis::Time t_last_target_measurement_ = okvis::Time(0); ///< last observation timestamp
+  okvis::Time t_last_target_prediction_ = okvis::Time(0); ///< last observation timestamp
+  const double sigma_v_c_ = 0.1; ///< m/s/sqrt(s)
+  const double sigma_alpha_c_ = 0.2; ///< rad/sqrt(s)
+  const double sigma_r_ = 0.1;
+  const double sigma_alpha_ = 0.04;
+  const double sigma_pt_ = 5.0; // detection error stdev
+
+  // hacky: the position sensor alignment
+  std::shared_ptr<ceres::PoseParameterBlock> positionSensorAlignmentParameterBlock_;
+
+  // hacky: MBZIRC keypoint locations
+  Eigen::Matrix2Xd keypointLocations_ = Eigen::Matrix2Xd(2,4);
+
+  bool targetInitialised_ = false;
+  bool gpsInitialised_ = false;
+
 };
 
 }  // namespace okvis

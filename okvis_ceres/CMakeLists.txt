@@ -4,6 +4,10 @@ project(okvis_ceres)
 # require Eigen
 find_package( Eigen REQUIRED )
 include_directories(${EIGEN_INCLUDE_DIR}) 
+
+# require GeographicLib
+find_package (GeographicLib REQUIRED)
+include_directories (${GeographicLib_INCLUDE_DIRS})
                
 # build the library 
 add_library(${PROJECT_NAME} 
@@ -14,6 +18,7 @@ add_library(${PROJECT_NAME}
   src/PoseLocalParameterization.cpp
   src/ImuError.cpp
   src/PoseError.cpp
+  src/PositionError.cpp
   src/RelativePoseError.cpp
   src/SpeedAndBiasError.cpp
   src/IdProvider.cpp
@@ -32,7 +37,7 @@ target_link_libraries(${PROJECT_NAME}
   PUBLIC okvis_cv 
   PUBLIC okvis_common
   PRIVATE ${CERES_LIBRARIES} 
-  PRIVATE ${OpenCV_LIBRARIES} 
+  PRIVATE ${GeographicLib_LIBRARIES}  
 )
 
 # installation if required
@@ -57,12 +62,14 @@ if(BUILD_TESTS)
     test/TestHomogeneousPointError.cpp
     test/TestReprojectionError.cpp
     test/TestImuError.cpp
+    # test/TestPositionError.cpp
     test/TestMap.cpp
     test/TestMarginalization.cpp
   )
   target_link_libraries(${PROJECT_TEST_NAME} 
     ${PROJECT_NAME} 
     ${GTEST_LIBRARY}  
+    ${GeographicLib_LIBRARIES}  
     pthread)
   add_test(test ${PROJECT_TEST_NAME})
 endif()

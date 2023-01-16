@@ -47,21 +47,88 @@
 #include <Eigen/Core>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-virtual-dtor"
+#include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/core/core.hpp> // Code that causes warning goes here
 #pragma GCC diagnostic pop
 #include "okvis/cameras/CameraBase.hpp"
 #include "okvis/cameras/DistortionBase.hpp"
+#include "okvis/cameras/NoDistortion.hpp"
 
 /// \brief okvis Main namespace of this package.
 namespace okvis {
 /// \brief cameras Namespace for camera-related functionality.
 namespace cameras {
 
+template<class DISTORTION_T>
+class PinholeCamera; // forward declaration
+
+/// \class PinholeCameraBase
+/// \brief This is an interface for all the different distortion versions, allowing generic undistortion.
+class PinholeCameraBase : public CameraBase {
+ public:
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  /// \brief Constructor for width, height and Id
+  inline PinholeCameraBase(int imageWidth, int imageHeight, uint64_t id = 0)
+        : CameraBase(imageWidth, imageHeight, id)
+  {
+  }
+
+  /// \brief Destructor.
+  virtual ~PinholeCameraBase()
+  {
+  }
+
+  /// \brief Initialise undistort maps to defaults, i.e.
+  /// undistortedFocalLengh = 0.5 * (focalLengthU() + focalLengthV()) (same for U and V), 
+  /// same image dimensions and center in the middle, i.e
+  /// undistortedImageCenterU() = 0.5 * imageWith() + 0.5.
+  /// \return True on success.
+  virtual bool initialiseUndistortMaps() = 0;
+
+  /// \brief Initialise undistort maps, provide custom parameters for the undistorted cam.
+  /// @param[in] undistortedImageWidth The width in pixels.
+  /// @param[in] undistortedImageHeight The height in pixels.
+  /// @param[in] undistortedFocalLengthU The horizontal focal length in pixels.
+  /// @param[in] undistortedFocalLengthV The vertical focal length in pixels.
+  /// @param[in] undistortedImageCenterU The horizontal centre in pixels.
+  /// @param[in] undistortedImageCenterV The vertical centre in pixels.
+  /// \return True on success.
+  virtual bool initialiseUndistortMaps(int undistortedImageWidth, int undistortedImageHeight, 
+      double undistortedFocalLengthU, double undistortedFocalLengthV, 
+      double undistortedImageCenterU, double undistortedImageCenterV) = 0;
+
+  /// \brief Get undistorted image -- assumes initialiseUndistortMaps was called
+  /// @param[in] srcImg The distorted input image.
+  /// @param[out] dstImg The undistorted output image.
+  /// \return True on success.
+  virtual bool undistortImage(const cv::Mat & srcImg, cv::Mat & destImg) const = 0;
+
+  /// \brief Get the model of the undistorted camera.
+  /// \return The PinholeCamera without distortion associated with the undistorted image.
+  virtual PinholeCamera<NoDistortion> undistortedPinholeCamera() const = 0;
+
+  /// \brief Get the focal length along the u-dimension.
+  /// \return The horizontal focal length in pixels.
+  virtual double focalLengthU() const = 0;
+
+  /// \brief Get the focal length along the v-dimension.
+  /// \return The vertical focal length in pixels.
+  virtual double focalLengthV() const = 0;
+
+  /// \brief Get the image centre along the u-dimension.
+  /// \return The horizontal centre in pixels.
+  virtual double imageCenterU() const = 0;
+
+  /// \brief Get the focal image centre along the v-dimension.
+  /// \return The vertical centre in pixels.
+  virtual double imageCenterV() const = 0;
+};
+
 /// \class PinholeCamera<DISTORTION_T>
 /// \brief This implements a standard pinhole camera projection model.
 /// \tparam DISTORTION_T the distortion type, e.g. okvis::cameras::RadialTangentialDistortion
 template<class DISTORTION_T>
-class PinholeCamera : public CameraBase
+class PinholeCamera : public PinholeCameraBase
 {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -81,7 +148,7 @@ class PinholeCamera : public CameraBase
                 const distortion_t & distortion, uint64_t id=-1);
 
   /// \brief Destructor.
-  ~PinholeCamera()
+  virtual ~PinholeCamera()
   {
   }
 
@@ -91,28 +158,28 @@ class PinholeCamera : public CameraBase
 
   /// \brief Get the focal length along the u-dimension.
   /// \return The horizontal focal length in pixels.
-  double focalLengthU() const
+  virtual double focalLengthU() const
   {
     return fu_;
   }
 
   /// \brief Get the focal length along the v-dimension.
   /// \return The vertical focal length in pixels.
-  double focalLengthV() const
+  virtual double focalLengthV() const
   {
     return fv_;
   }
 
   /// \brief Get the image centre along the u-dimension.
   /// \return The horizontal centre in pixels.
-  double imageCenterU() const
+  virtual double imageCenterU() const
   {
     return cu_;
   }
 
   /// \brief Get the focal image centre along the v-dimension.
   /// \return The vertical centre in pixels.
-  double imageCenterV() const
+  virtual double imageCenterV() const
   {
     return cv_;
   }
@@ -131,6 +198,35 @@ class PinholeCamera : public CameraBase
   {
     return NumIntrinsics;
   }
+
+  /// \brief Initialise undistort maps to defaults, i.e.
+  /// undistortedFocalLengh = 0.5 * (focalLengthU() + focalLengthV()) (same for U and V), 
+  /// same image dimensions and center in the middle, i.e
+  /// undistortedImageCenterU() = 0.5 * imageWith() + 0.5.
+  /// \return True on success.
+  virtual bool initialiseUndistortMaps();
+
+  /// \brief Initialise undistort maps, provide custom parameters for the undistorted cam.
+  /// @param[in] undistortedImageWidth The width in pixels.
+  /// @param[in] undistortedImageHeight The height in pixels.
+  /// @param[in] undistortedFocalLengthU The horizontal focal length in pixels.
+  /// @param[in] undistortedFocalLengthV The vertical focal length in pixels.
+  /// @param[in] undistortedImageCenterU The horizontal centre in pixels.
+  /// @param[in] undistortedImageCenterV The vertical centre in pixels.
+  /// \return True on success.
+  virtual bool initialiseUndistortMaps(int undistortedImageWidth, int undistortedImageHeight, 
+      double undistortedFocalLengthU, double undistortedFocalLengthV, 
+      double undistortedImageCenterU, double undistortedImageCenterV);
+
+  /// \brief Get the model of the undistorted camera.
+  /// \return The PinholeCamera without distortion associated with the undistorted image.
+  virtual PinholeCamera<NoDistortion> undistortedPinholeCamera() const;
+
+  /// \brief Get undistorted image -- assumes initialiseUndistortMaps was called
+  /// @param[in] srcImg The distorted input image.
+  /// @param[out] dstImg The undistorted output image.
+  /// \return True on success.
+  virtual bool undistortImage(const cv::Mat & srcImg, cv::Mat & destImg) const;
 
   //////////////////////////////////////////////////////////////
   /// \name Methods to project points
@@ -323,6 +419,16 @@ class PinholeCamera : public CameraBase
   double one_over_fu_;  ///< 1.0 / fu_
   double one_over_fv_;  ///< 1.0 / fv_
   double fu_over_fv_;  ///< fu_ / fv_
+
+  cv::Mat map_x_fast_; ///< OpenCV undistort fast map x-coordinates
+  cv::Mat map_y_fast_; ///< OpenCV undistort fast map x-coordinates
+
+  int undistortedImageWidth_ = 0;  ///< undistortedImageWidth The width in pixels.
+  int undistortedImageHeight_ = 0;  ///< undistortedImageHeight The height in pixels.
+  double undistortedFocalLengthU_ = 0.0;  ///< undistortedFocalLengthU The horizontal focal length in pixels.
+  double undistortedFocalLengthV_ = 0.0;  ///< undistortedFocalLengthV The vertical focal length in pixels.
+  double undistortedImageCenterU_ = 0.0;  ///< undistortedImageCenterU The horizontal centre in pixels.
+  double undistortedImageCenterV_ = 0.0;  ///< undistortedImageCenterV The vertical centre in pixels.
 
 };
 

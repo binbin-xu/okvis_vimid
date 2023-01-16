@@ -39,12 +39,18 @@
  */
 
 #include <map>
+#include <fstream>
+#include <iomanip>
 
 #include <glog/logging.h>
 
 #include <okvis/ThreadedKFVio.hpp>
 #include <okvis/assert_macros.hpp>
 #include <okvis/ceres/ImuError.hpp>
+
+#ifndef OKVIS_N_THREADS
+#define OKVIS_N_THREADS 4 // default works well for quadcore i7
+#endif
 
 /// \brief okvis Main namespace of this package.
 namespace okvis {
@@ -102,7 +108,8 @@ void ThreadedKFVio::init() {
   lastAddedStateTimestamp_ = okvis::Time(0.0) + temporal_imu_data_overlap;  // s.t. last_timestamp_ - overlap >= 0 (since okvis::time(-0.02) returns big number)
 
   estimator_.addImu(parameters_.imu);
-  for (size_t i = 0; i < numCameras_; ++i) {
+  size_t i = 0;
+  for (; i < numCameras_; ++i) {
     // parameters_.camera_extrinsics is never set (default 0's)...
     // do they ever change?
     estimator_.addCamera(parameters_.camera_extrinsics);
@@ -110,21 +117,48 @@ void ThreadedKFVio::init() {
           std::shared_ptr<threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::CameraMeasurement> > >
           (new threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::CameraMeasurement> >()));
   }
+  for (; i < numCameras_ + parameters_.trackerNCameraSystem.numCameras(); ++i) {
+    // parameters_.camera_extrinsics is never set (default 0's)...
+    // do they ever change?
+    cameraMeasurementsReceived_.emplace_back(
+          std::shared_ptr<threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::CameraMeasurement> > >
+          (new threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::CameraMeasurement> >()));
+  }
+  estimator_.addGps(parameters_.gps);
   
   // set up windows so things don't crash on Mac OS
   if(parameters_.visualization.displayImages){
     for (size_t im = 0; im < parameters_.nCameraSystem.numCameras(); im++) {
       std::stringstream windowname;
       windowname << "OKVIS camera " << im;
-  	  cv::namedWindow(windowname.str());
+      cv::namedWindow(windowname.str());
     }
   }
   
+  // // MBZIRC: target keypoint locations
+  // const double scale = parameters_.targetSizeMetres/1.5;
+  // const double s_45 = std::sin(45 * M_PI / 180.0);
+  // const double l = scale * 0.33;
+  // const double r = scale * 0.1 / std::sqrt(2);
+
+  // Eigen::Matrix2Xd xPoints(2,12);
+  // xPoints << r, r + l * s_45, l * s_45, 0, -l * s_45, -r - l * s_45, -r, -r
+  //     - l * s_45, -l * s_45, 0, l * s_45, r + l * s_45, 0, l * s_45, r
+  //     + l * s_45, r, r + l * s_45, l * s_45, 0, -l * s_45, -r - l * s_45, -r, -r
+  //     - l * s_45, -l * s_45;
+  // frontend_.setTargetKeypoints(xPoints);
+  // frontend_.setTargetSize(parameters_.targetSizeMetres);
+  // estimator_.setTargetKeypoints(xPoints);
+
   startThreads();
 }
 
+std::vector<std::shared_ptr<ThreadedKFVio::MarkerMeasurement>> markerMeasurements;
+
 // Start all threads.
 void ThreadedKFVio::startThreads() {
+
+  markerMeasurements.resize(parameters_.trackerNCameraSystem.numCameras());
 
   // consumer threads
   for (size_t i = 0; i < numCameras_; ++i) {
@@ -150,7 +184,7 @@ void ThreadedKFVio::startThreads() {
 
 // Destructor. This calls Shutdown() for all threadsafe queues and joins all threads.
 ThreadedKFVio::~ThreadedKFVio() {
-  for (size_t i = 0; i < numCameras_; ++i) {
+  for (size_t i = 0; i < numCameras_+ parameters_.trackerNCameraSystem.numCameras(); ++i) {
     cameraMeasurementsReceived_.at(i)->Shutdown();
   }
   keypointMeasurements_.Shutdown();
@@ -160,6 +194,7 @@ ThreadedKFVio::~ThreadedKFVio() {
   visualizationData_.Shutdown();
   imuFrameSynchronizer_.shutdown();
   positionMeasurementsReceived_.Shutdown();
+  gpsPositionMeasurementsReceived_.Shutdown();
 
   // consumer threads
   for (size_t i = 0; i < numCameras_; ++i) {
@@ -177,12 +212,13 @@ ThreadedKFVio::~ThreadedKFVio() {
   optimizationThread_.join();
   publisherThread_.join();
 
-  /*okvis::kinematics::Transformation endPosition;
-  estimator_.get_T_WS(estimator_.currentFrameId(), endPosition);
+/*for (size_t i = 0; i < numCameras_; ++i) {
+  okvis::kinematics::Transformation T_SC;
+  estimator_.getCameraSensorStates(estimator_.currentFrameId(), i, T_SC);
   std::stringstream s;
-  s << endPosition.r();
-  LOG(INFO) << "Sensor end position:\n" << s.str();
-  LOG(INFO) << "Distance to origin: " << endPosition.r().norm();*/
+  s << T_SC.T();
+  LOG(INFO) << "T_SC[" << i <<"]:\n" << s.str();
+}*/
 #ifndef DEACTIVATE_TIMERS
   LOG(INFO) << okvis::timing::Timing::print();
 #endif
@@ -191,6 +227,7 @@ ThreadedKFVio::~ThreadedKFVio() {
 // Add a new image.
 bool ThreadedKFVio::addImage(const okvis::Time & stamp, size_t cameraIndex,
                              const cv::Mat & image,
+                             const cv::Mat & depthImage,
                              const std::vector<cv::KeyPoint> * keypoints,
                              bool* /*asKeyframe*/) {
   assert(cameraIndex<numCameras_);
@@ -207,6 +244,7 @@ bool ThreadedKFVio::addImage(const okvis::Time & stamp, size_t cameraIndex,
   std::shared_ptr<okvis::CameraMeasurement> frame = std::make_shared<
       okvis::CameraMeasurement>();
   frame->measurement.image = image;
+  frame->measurement.depthImage = depthImage;
   frame->timeStamp = stamp;
   frame->sensorId = cameraIndex;
 
@@ -223,6 +261,25 @@ bool ThreadedKFVio::addImage(const okvis::Time & stamp, size_t cameraIndex,
   } else {
     cameraMeasurementsReceived_[cameraIndex]->PushNonBlockingDroppingIfFull(
         frame, max_camera_input_queue_size);
+    return cameraMeasurementsReceived_[cameraIndex]->Size() == 1;
+  }
+}
+
+// Add a new image for target tracking.
+bool ThreadedKFVio::addTrackingImage(const okvis::Time & stamp, size_t cameraIndex,
+                              const cv::Mat & image) {
+  std::shared_ptr<okvis::CameraMeasurement> frame = std::make_shared<
+      okvis::CameraMeasurement>();
+  frame->measurement.image = image;
+  frame->timeStamp = stamp;
+  frame->sensorId = cameraIndex;
+
+  if (blocking_) {
+    cameraMeasurementsReceived_[cameraIndex]->PushBlockingIfFull(frame, 1);
+    return true;
+  } else {
+    cameraMeasurementsReceived_[cameraIndex]->PushNonBlockingDroppingIfFull(
+        frame, 1);
     return cameraMeasurementsReceived_[cameraIndex]->Size() == 1;
   }
 }
@@ -250,6 +307,8 @@ bool ThreadedKFVio::addImuMeasurement(const okvis::Time & stamp,
   imu_measurement.measurement.gyroscopes = omega;
   imu_measurement.timeStamp = stamp;
 
+//std::cout << stamp.toSec() << " " << omega.transpose() << " " << alpha.transpose() << std::endl;
+
   if (blocking_) {
     imuMeasurementsReceived_.PushBlockingIfFull(imu_measurement, 1);
     return true;
@@ -263,11 +322,9 @@ bool ThreadedKFVio::addImuMeasurement(const okvis::Time & stamp,
 // Add a position measurement.
 void ThreadedKFVio::addPositionMeasurement(const okvis::Time & stamp,
                                            const Eigen::Vector3d & position,
-                                           const Eigen::Vector3d & positionOffset,
                                            const Eigen::Matrix3d & positionCovariance) {
   okvis::PositionMeasurement position_measurement;
   position_measurement.measurement.position = position;
-  position_measurement.measurement.positionOffset = positionOffset;
   position_measurement.measurement.positionCovariance = positionCovariance;
   position_measurement.timeStamp = stamp;
 
@@ -281,12 +338,27 @@ void ThreadedKFVio::addPositionMeasurement(const okvis::Time & stamp,
   }
 }
 
-// Add a GPS measurement.
-void ThreadedKFVio::addGpsMeasurement(const okvis::Time &, double, double,
-                                      double, const Eigen::Vector3d &,
-                                      const Eigen::Matrix3d &) {
-  OKVIS_THROW(Exception, "GPS measurements not supported")
-}
+// // Add a GPS measurement.
+// void ThreadedKFVio::addGpsMeasurement(const okvis::Time & stamp,
+//                                       double lat_wgs84_deg, double lon_wgs84_deg,
+//                                       double alt_wgs84,
+//                                       const Eigen::Matrix3d & positionCovarianceENU) {
+//   okvis::GpsPositionMeasurement position_measurement;
+//   position_measurement.measurement.lat_wgs84 = lat_wgs84_deg;
+//   position_measurement.measurement.lon_wgs84 = lon_wgs84_deg;
+//   position_measurement.measurement.alt_wgs84 = alt_wgs84;
+//   position_measurement.measurement.positionCovarianceENU = positionCovarianceENU;
+//   position_measurement.timeStamp = stamp;
+
+//   if (blocking_) {
+//     gpsPositionMeasurementsReceived_.PushBlockingIfFull(position_measurement, 1);
+//     return;
+//   } else {
+//     gpsPositionMeasurementsReceived_.PushNonBlockingDroppingIfFull(
+//         position_measurement, maxGpsPositionInputQueueSize_);
+//    return;
+//   }
+// }
 
 // Add a magnetometer measurement.
 void ThreadedKFVio::addMagnetometerMeasurement(const okvis::Time &,
@@ -418,11 +490,43 @@ void ThreadedKFVio::frameConsumerLoop(size_t cameraIndex) {
                                           multiFrame->timestamp());
       propagationTimer.stop();
     }
+
     okvis::kinematics::Transformation T_WC = T_WS
         * (*parameters_.nCameraSystem.T_SC(frame->sensorId));
     beforeDetectTimer.stop();
     detectTimer.start();
-    frontend_.detectAndDescribe(frame->sensorId, multiFrame, T_WC, nullptr);
+
+//     if(cameraIndex==0) {
+//       for(size_t t=0; t<parameters_.trackerNCameraSystem.numCameras(); ++t) {
+//         okvis::kinematics::Transformation T_WC_trackerCam = T_WS
+//             * (*parameters_.trackerNCameraSystem.T_SC(t));
+//         std::shared_ptr<okvis::CameraMeasurement> fr;
+//         markerMeasurements.at(t).reset(new MarkerMeasurement());
+//         if(cameraMeasurementsReceived_[numCameras_+t]->PopNonBlocking(&fr)){
+// // 	  std::cout << "received tracker image "  << numCameras_+t << std::endl;
+//           kinematics::Transformation T_WT;
+//           {
+//             std::lock_guard<std::mutex> lock(trackerPrediction_mutex_);
+//             estimator_.getPredictedTargetState(multiFrame->timestamp(), T_WT);
+//             //std::cout << T_WT.T() << std::endl;
+//           }
+//           //std::cout << fr->measurement.image.cols << std::endl;
+//           const okvis::kinematics::Transformation T_CT_init = T_WC_trackerCam.inverse()*T_WT;
+// //          std::cout << std::endl << "frontend_.trackDetectTarget start!" << std::endl;
+//           frontend_.trackDetectTarget(
+//               fr->sensorId, fr->measurement.image, multiFrame->timestamp(), parameters_,
+//               T_CT_init, markerMeasurements.at(t)->keypointMatches,
+//               markerMeasurements.at(t)->T_CT,
+//               markerMeasurements.at(t)->successfulRedetection);
+// //          std::cout << "frontend_.trackDetectTarget done!" << std::endl << std::endl;
+//           //std::cout <<"no. matches = " << markerMeasurements.at(t)->keypointMatches.size() << std::endl;
+//         }
+//       }
+//     }
+    //OKVIS_ASSERT_TRUE(Exception, frame->sensorId == cameraIndex,"very bad");
+    if(!parameters_.nCameraSystem.isVirtual(frame->sensorId)) {
+      frontend_.detectAndDescribe(frame->sensorId, multiFrame, T_WC, nullptr, nullptr);
+    }
     detectTimer.stop();
     afterDetectTimer.start();
 
@@ -447,25 +551,30 @@ void ThreadedKFVio::frameConsumerLoop(size_t cameraIndex) {
       if (keypointMeasurements_.PushBlockingIfFull(multiFrame, 1) == false) {
         return;
       }
+      markerMeasurements_.PushNonBlockingDroppingIfFull(markerMeasurements, 1);
       waitForMatchingThreadTimer.stop();
     }
   }
 }
 
 // Loop that matches frames with existing frames.
-void ThreadedKFVio::matchingLoop() {
-  TimerSwitchable prepareToAddStateTimer("2.1 prepareToAddState",true);
-  TimerSwitchable waitForOptimizationTimer("2.2 waitForOptimization",true);
-  TimerSwitchable addStateTimer("2.3 addState",true);
-  TimerSwitchable matchingTimer("2.4 matching",true);
+void ThreadedKFVio::matchingLoop()
+{
+  TimerSwitchable prepareToAddStateTimer("2.1 prepareToAddState", true);
+  TimerSwitchable waitForOptimizationTimer("2.2 waitForOptimization", true);
+  TimerSwitchable addStateTimer("2.3 addState", true);
+  TimerSwitchable matchingTimer("2.4 matching", true);
 
   for (;;) {
     // get new frame
     std::shared_ptr<okvis::MultiFrame> frame;
+    std::vector<std::shared_ptr<MarkerMeasurement> > markers;
 
     // get data and check for termination request
     if (keypointMeasurements_.PopBlocking(&frame) == false)
       return;
+    // get data and check for termination request
+    markerMeasurements_.PopNonBlocking(&markers);
 
     prepareToAddStateTimer.start();
     // -- get relevant imu messages for new state
@@ -481,7 +590,7 @@ void ThreadedKFVio::matchingLoop() {
     // wait until all relevant imu messages have arrived and check for termination request
     if (imuFrameSynchronizer_.waitForUpToDateImuData(
         okvis::Time(imuDataEndTime)) == false)
-      return; OKVIS_ASSERT_TRUE_DBG(Exception,
+      return;OKVIS_ASSERT_TRUE_DBG(Exception,
         imuDataEndTime < imuMeasurements_.back().timeStamp,
         "Waiting for up to date imu data seems to have failed!");
 
@@ -509,10 +618,53 @@ void ThreadedKFVio::matchingLoop() {
         lastAddedStateTimestamp_ = frame->timestamp();
         addStateTimer.stop();
       } else {
-        LOG(ERROR) << "Failed to add state! will drop multiframe.";
+        LOG(ERROR)<< "Failed to add state! will drop multiframe.";
         addStateTimer.stop();
         continue;
       }
+
+      // // -- add position measurements
+      // {
+      //   std::lock_guard<std::mutex> positionLock(positionMeasurements_mutex_);
+      //   for (auto it = positionMeasurements_.begin();
+      //       it != positionMeasurements_.end();) {
+      //     bool success = false;
+      //     if (it->timeStamp < frame->timestamp()) {
+      //       success = estimator_.addPositionMeasurement(
+      //           it->timeStamp, it->measurement.position,
+      //           it->measurement.positionCovariance);
+      //       if (!success) {
+      //         LOG(WARNING)<< "Failed to add position measurement!";
+      //       }
+      //       it = positionMeasurements_.erase(it);
+      //     } else {
+      //       ++it;
+      //     }
+      //   }
+      // }
+
+      // // -- add GPS position measurements
+      // {
+      //   std::lock_guard<std::mutex> positionLock(
+      //       gpsPositionMeasurements_mutex_);
+      //   for (auto it = gpsPositionMeasurements_.begin();
+      //       it != gpsPositionMeasurements_.end();) {
+      //     bool success = false;
+      //     if (it->timeStamp < frame->timestamp()) {
+      //       //std::cout << "adding stamp " << frame->timestamp() << std::endl;
+      //       success = estimator_.addGpsMeasurement(
+      //           it->timeStamp, it->measurement.lat_wgs84,
+      //           it->measurement.lon_wgs84, it->measurement.alt_wgs84,
+      //           it->measurement.positionCovarianceENU);
+      //       if (!success) {
+      //         LOG(WARNING)<< "Failed to add gps position measurement!";
+      //       }
+      //       it = gpsPositionMeasurements_.erase(it);
+      //     } else {
+      //       ++it;
+      //     }
+      //   }
+      // }
 
       // -- matching keypoints, initialising landmarks etc.
       okvis::kinematics::Transformation T_WS;
@@ -520,15 +672,57 @@ void ThreadedKFVio::matchingLoop() {
       matchingTimer.start();
       frontend_.dataAssociationAndInitialization(estimator_, T_WS, parameters_,
                                                  map_, frame, &asKeyframe);
+      // write tracks
+      for (size_t i = 0; i < frame->numFrames(); ++i) {
+        if (csvTracksFiles_[i]) {
+          for (size_t k = 0; k < frame->numKeypoints(i); ++k) {
+            cv::KeyPoint keypoint;
+            frame->getCvKeypoint(i, k, keypoint);
+            std::stringstream time;
+            time << frame->timestamp().sec << std::setw(9)
+                << std::setfill('0') << frame->timestamp().nsec;
+            *csvTracksFiles_[i] << time.str() << ", " << std::setprecision(19)
+                << frame->landmarkId(i, k) << ", " << std::scientific
+                << std::setprecision(18) << keypoint.pt.x << ", "
+                                         << keypoint.pt.y << ", "
+                                         << keypoint.size / 16.0 << std::endl;
+          }
+        }
+      }
+
       matchingTimer.stop();
       if (asKeyframe)
         estimator_.setKeyframe(frame->id(), asKeyframe);
-      if(!blocking_) {
-        double timeLimit = parameters_.optimization.timeLimitForMatchingAndOptimization
-                           -(okvis::Time::now()-t0Matching).toSec();
-        estimator_.setOptimizationTimeLimit(std::max<double>(0.0, timeLimit),
-                                            parameters_.optimization.min_iterations);
+      if (!blocking_) {
+        double timeLimit = parameters_.optimization
+            .timeLimitForMatchingAndOptimization
+            - (okvis::Time::now() - t0Matching).toSec();
+        estimator_.setOptimizationTimeLimit(
+            std::max<double>(0.0, timeLimit),
+            parameters_.optimization.min_iterations);
       }
+
+      // for(size_t i=0; i<markers.size(); ++i) {
+      //   //std::cout<<"."<<std::endl;
+      //   //feed to estimator
+      //   std::lock_guard<std::mutex> lock(trackerPrediction_mutex_);
+      //   auto camera = std::static_pointer_cast<const cameras::PinholeCameraBase>(
+      //       parameters_.trackerNCameraSystem.cameraGeometry(i))
+      //           ->undistortedPinholeCamera();
+      //   if(markers.at(i)->successfulRedetection) {
+      //     estimator_.addTargetMeasurement(
+      //         0, frame->id(), i + numCameras_,
+      //         *parameters_.trackerNCameraSystem.T_SC(i), camera,
+      //         markers.at(i)->keypointMatches, &markers.at(i)->T_CT);
+      //   } else {
+      //     estimator_.addTargetMeasurement(
+      //         0, frame->id(), i + numCameras_,
+      //         *parameters_.trackerNCameraSystem.T_SC(i), camera,
+      //         markers.at(i)->keypointMatches);
+      //   }
+      // }
+
+
       optimizationDone_ = false;
     }  // unlock estimator_mutex_
 
@@ -579,12 +773,20 @@ void ThreadedKFVio::imuConsumerLoop() {
       Eigen::Matrix<double, 15, 15> covariance;
       Eigen::Matrix<double, 15, 15> jacobian;
 
-      frontend_.propagation(imuMeasurements_, imu_params_, T_WS_propagated_,
-                            speedAndBiases_propagated_, start, *end, &covariance,
-                            &jacobian);
+      if(frontend_.isInitialized()) {
+        // only propagate if initialised (will drift crazily otherwise)
+        frontend_.propagation(imuMeasurements_, imu_params_, T_WS_propagated_,
+                              speedAndBiases_propagated_, start, *end, &covariance,
+                              &jacobian);
+      }
+
       OptimizationResults result;
       result.stamp = *end;
       result.T_WS = T_WS_propagated_;
+      {
+        std::lock_guard<std::mutex> lastStateLock(lastState_mutex_);
+        result.T_GW = T_GW_;
+      }
       result.speedAndBiases = speedAndBiases_propagated_;
       result.omega_S = imuMeasurements_.back().measurement.gyroscopes
           - speedAndBiases_propagated_.segment<3>(3);
@@ -617,6 +819,17 @@ void ThreadedKFVio::positionConsumerLoop() {
 
 // Loop to process GPS measurements.
 void ThreadedKFVio::gpsConsumerLoop() {
+  okvis::GpsPositionMeasurement data;
+  for (;;) {
+    // get data and check for termination request
+    if (gpsPositionMeasurementsReceived_.PopBlocking(&data) == false)
+      return;
+    // collect
+    {
+      std::lock_guard<std::mutex> positionLock(gpsPositionMeasurements_mutex_);
+      gpsPositionMeasurements_.push_back(data);
+    }
+  }
 }
 
 // Loop to process magnetometer measurements.
@@ -639,7 +852,7 @@ void ThreadedKFVio::visualizationLoop() {
     for (size_t i = 0; i < parameters_.nCameraSystem.numCameras(); ++i) {
       out_images[i] = visualizer_.drawMatches(new_data, i);
     }
-	displayImages_.PushNonBlockingDroppingIfFull(out_images,1);
+  displayImages_.PushNonBlockingDroppingIfFull(out_images,1);
   }
 }
 
@@ -647,7 +860,7 @@ void ThreadedKFVio::visualizationLoop() {
 void ThreadedKFVio::display() {
   std::vector<cv::Mat> out_images;
   if (displayImages_.Size() == 0)
-	return;
+  return;
   if (displayImages_.PopBlocking(&out_images) == false)
     return;
   // draw
@@ -656,6 +869,10 @@ void ThreadedKFVio::display() {
     windowname << "OKVIS camera " << im;
     cv::imshow(windowname.str(), out_images[im]);
   }
+
+//// MBZIRC -hack
+  //cv::imshow("detection", frontend_.debugImage);
+
   cv::waitKey(1);
 }
 
@@ -733,7 +950,7 @@ void ThreadedKFVio::optimizationLoop() {
       std::lock_guard<std::mutex> l(estimator_mutex_);
       optimizationTimer.start();
       //if(frontend_.isInitialized()){
-        estimator_.optimize(parameters_.optimization.max_iterations, 2, false);
+        estimator_.optimize(parameters_.optimization.max_iterations, std::max(1,OKVIS_N_THREADS/2), false);
       //}
       /*if (estimator_.numFrames() > 0 && !frontend_.isInitialized()){
         // undo translation
@@ -777,6 +994,8 @@ void ThreadedKFVio::optimizationLoop() {
         estimator_.get_T_WS(frame_pairs->id(), lastOptimized_T_WS_);
         estimator_.getSpeedAndBias(frame_pairs->id(), 0,
                                    lastOptimizedSpeedAndBiases_);
+        estimator_.get_T_GW(frame_pairs->id(), T_GW_);
+        result.T_GW = T_GW_;
         lastOptimizedStateTimestamp_ = frame_pairs->timestamp();
 
         // if we publish the state after each IMU propagation we do not need to publish it here.
@@ -788,7 +1007,35 @@ void ThreadedKFVio::optimizationLoop() {
         }
         else
           result.onlyPublishLandmarks = true;
+        double velocityUncertainty = 0.0;
+        result.T_WT_success = estimator_.get_T_WT(frame_pairs->id(), 0,result.T_WT,result.v_WT_W, result.omega_WT_W, velocityUncertainty);
+        if(velocityUncertainty > 1.0) {
+          result.T_WT_success = false; // make sure to have a proper speed estimate before outputing this
+        }
         estimator_.getLandmarks(result.landmarksVector);
+
+        // copy a whole lot of stuff, if a dense stereo callback is registered.
+        if(denseStereoCallback_) {
+          for (size_t k=0; k< estimator_.numFrames(); ++k) {
+            FrameInfo info;
+            uint64_t frameId = estimator_.frameIdByAge(estimator_.numFrames()-k-1);
+            info.timestamp = estimator_.timestamp(frameId);
+            estimator_.get_T_WS(frameId, info.T_WS);
+            const size_t numCameras = parameters_.nCameraSystem.numCameras();
+            info.images.resize(numCameras);
+            info.depthImages.resize(numCameras);
+            info.T_SC_i.resize(numCameras);
+            for(size_t i=0; i<numCameras; ++i) {
+              estimator_.getCameraSensorStates(frameId,i,info.T_SC_i.at(i));
+              info.images.at(i) = estimator_.multiFrame(frameId)->image(i);
+              if(parameters_.nCameraSystem.isDepthCamera(i)) {
+                info.depthImages.at(i) = estimator_.multiFrame(frameId)->depthImage(i);
+              }
+            }
+            info.isKeyframe = estimator_.isKeyframe(frameId);
+            result.frameInfos.push_back(info);
+          }
+        }
 
         repropagationNeeded_ = true;
       }
@@ -862,6 +1109,12 @@ void ThreadedKFVio::publisherLoop() {
       return;
 
     // call all user callbacks
+    if(parameters_.publishing.referenceFrame == FrameName::G) {
+      // we need to change stuff into G frame
+std::cout << "wrong" << std::endl;
+      result.T_WS = result.T_GW * result.T_WS;
+      result.speedAndBiases.head<3>() = result.T_GW.C() * result.speedAndBiases.head<3>();
+    }
     if (stateCallback_ && !result.onlyPublishLandmarks)
       stateCallback_(result.stamp, result.T_WS);
     if (fullStateCallback_ && !result.onlyPublishLandmarks)
@@ -871,9 +1124,29 @@ void ThreadedKFVio::publisherLoop() {
       fullStateCallbackWithExtrinsics_(result.stamp, result.T_WS,
                                        result.speedAndBiases, result.omega_S,
                                        result.vector_of_T_SCi);
-    if (landmarksCallback_ && !result.landmarksVector.empty())
-      landmarksCallback_(result.stamp, result.landmarksVector,
-                         result.transferredLandmarks);  //TODO(gohlp): why two maps?
+    if(denseStereoCallback_ && !result.frameInfos.empty()){
+      denseStereoCallback_(result.frameInfos);
+    }
+
+    if (landmarksCallback_ && !result.landmarksVector.empty()) {
+        if(parameters_.publishing.referenceFrame == FrameName::G){
+            for(size_t i=0; i<result.landmarksVector.size(); ++i){
+                result.landmarksVector[i].point = result.T_GW*result.landmarksVector[i].point;
+            }
+            for(size_t i=0; i<result.transferredLandmarks.size(); ++i){
+                result.transferredLandmarks[i].point = result.T_GW*result.transferredLandmarks[i].point;//*(1.0/result.transferredLandmarks[i].point[3]));
+            }
+        }
+        landmarksCallback_(result.stamp, result.landmarksVector,
+                           result.transferredLandmarks);  //TODO(gohlp): why two maps?
+    }
+    if(markerCallback_ && result.onlyPublishLandmarks && result.T_WT_success) {
+      if(parameters_.publishing.referenceFrame == FrameName::G) {
+        markerCallback_(result.stamp, result.T_GW * result.T_WT, result.T_GW.C() * result.v_WT_W, result.T_GW.C() * result.omega_WT_W);
+      } else {
+        markerCallback_(result.stamp, result.T_WT, result.v_WT_W, result.omega_WT_W);
+      }
+    }
   }
 }
 

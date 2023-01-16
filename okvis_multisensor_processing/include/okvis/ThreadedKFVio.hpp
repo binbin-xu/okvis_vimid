@@ -121,6 +121,7 @@ class ThreadedKFVio : public VioInterface {
    * \param stamp        The image timestamp.
    * \param cameraIndex  The index of the camera that the image originates from.
    * \param image        The image.
+   * \param DepthImage   A depth image, if available [5000*mm].
    * \param keypoints    Optionally aready pass keypoints. This will skip the detection part.
    * \param asKeyframe   Use the new image as keyframe. Not implemented.
    * \warning The frame consumer loop does not support using existing keypoints yet.
@@ -129,8 +130,19 @@ class ThreadedKFVio : public VioInterface {
    */
   virtual bool addImage(const okvis::Time & stamp, size_t cameraIndex,
                         const cv::Mat & image,
+                        const cv::Mat & depthImage = cv::Mat(),
                         const std::vector<cv::KeyPoint> * keypoints = 0,
                         bool* asKeyframe = 0);
+
+  /**
+   * \brief              Add a new image for target tracking.
+   * \param stamp        The image timestamp.
+   * \param cameraIndex  The index of the camera that the image originates from.
+   * \param image        The image.
+   * \return             Returns true normally. False, if the previous one has not been processed yet.
+   */
+  virtual bool addTrackingImage(const okvis::Time & stamp, size_t cameraIndex,
+                                const cv::Mat & image);
 
   /**
    * \brief             Add an abstracted image observation.
@@ -165,29 +177,25 @@ class ThreadedKFVio : public VioInterface {
    * \warning Not implemented.
    * \param stamp                The measurement timestamp.
    * \param position             The position in world frame.
-   * \param positionOffset       Body frame antenna position offset [m].
    * \param positionCovariance   The position measurement covariance matrix.
    */
   virtual void addPositionMeasurement(
       const okvis::Time & stamp, const Eigen::Vector3d & position,
-      const Eigen::Vector3d & positionOffset,
       const Eigen::Matrix3d & positionCovariance);
 
   /**
    * \brief                       Add a GPS measurement.
-   * \warning Not implemented.
+   * \warning Experimental.
    * \param stamp                 The measurement timestamp.
    * \param lat_wgs84_deg         WGS84 latitude [deg].
    * \param lon_wgs84_deg         WGS84 longitude [deg].
-   * \param alt_wgs84_deg         WGS84 altitude [m].
-   * \param positionOffset        Body frame antenna position offset [m].
+   * \param alt_wgs84             WGS84 altitude [m].
    * \param positionCovarianceENU The position measurement covariance matrix.
    */
-  virtual void addGpsMeasurement(const okvis::Time & stamp,
-                                 double lat_wgs84_deg, double lon_wgs84_deg,
-                                 double alt_wgs84_deg,
-                                 const Eigen::Vector3d & positionOffset,
-                                 const Eigen::Matrix3d & positionCovarianceENU);
+  // virtual void addGpsMeasurement(const okvis::Time & stamp,
+  //                                double lat_wgs84_deg, double lon_wgs84_deg,
+  //                                double alt_wgs84,
+  //                                const Eigen::Matrix3d & positionCovarianceENU);
 
   /**
    * \brief                      Add a magnetometer measurement.
@@ -286,13 +294,21 @@ class ThreadedKFVio : public VioInterface {
    */
   int deleteImuMeasurements(const okvis::Time& eraseUntil);
 
+ public:
+  struct MarkerMeasurement {
+      EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+      okvis::kinematics::Transformation T_CT;
+      std::vector<std::pair<size_t,cv::Point2f>> keypointMatches;
+      bool successfulRedetection = false;
+    };
+
  private:
 
   /// @brief This struct contains the results of the optimization for ease of publication.
   ///        It is also used for publishing poses that have been propagated with the IMU
   ///        measurements.
   struct OptimizationResults {
-		EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     okvis::Time stamp;                          ///< Timestamp of the optimized/propagated pose.
     okvis::kinematics::Transformation T_WS;     ///< The pose.
     okvis::SpeedAndBias speedAndBiases;         ///< The speeds and biases.
@@ -300,9 +316,19 @@ class ThreadedKFVio : public VioInterface {
     /// The relative transformation of the cameras to the sensor (IMU) frame
     std::vector<okvis::kinematics::Transformation,
         Eigen::aligned_allocator<okvis::kinematics::Transformation> > vector_of_T_SCi;
+
     okvis::MapPointVector landmarksVector;      ///< Vector containing the current landmarks.
     okvis::MapPointVector transferredLandmarks; ///< Vector of the landmarks that have been marginalized out.
     bool onlyPublishLandmarks;                  ///< Boolean to signalise the publisherLoop() that only the landmarks should be published
+    okvis::kinematics::Transformation T_WT;     ///< The tracked target.
+    Eigen::Vector3d v_WT_W;                     ///< The tracked target velocity.
+    Eigen::Vector3d omega_WT_W;                 ///< The tracked target velocity.
+    bool T_WT_success;                          ///< The tracked target -- successful?
+
+    okvis::kinematics::Transformation T_GW;     ///< The transformation to GPS frame. (locked with lastStateMutex)
+
+    /// Comprehensive state info for whole window.
+    std::vector<FrameInfo, Eigen::aligned_allocator<FrameInfo>> frameInfos;
   };
 
   /// @name State variables
@@ -314,6 +340,9 @@ class ThreadedKFVio : public VioInterface {
   okvis::ImuParameters imu_params_;
   okvis::kinematics::Transformation T_WS_propagated_; ///< The pose propagated by the IMU measurements
   std::shared_ptr<okvis::MapPointVector> map_;        ///< The map. Unused.
+
+  okvis::kinematics::Transformation T_GW_;     ///< The transformation to GPS frame. (locked with lastStateMutex)
+
 
   // lock lastState_mutex_ when accessing these
   /// \brief Resulting pose of the last optimization
@@ -352,12 +381,16 @@ class ThreadedKFVio : public VioInterface {
   /// Position measurement input queue.
   okvis::threadsafe::ThreadSafeQueue<okvis::PositionMeasurement> positionMeasurementsReceived_;
 
+  /// GpsPosition measurement input queue.
+  okvis::threadsafe::ThreadSafeQueue<okvis::GpsPositionMeasurement> gpsPositionMeasurementsReceived_;
+
   /// @}
   /// @name Measurement operation queues.
   /// @{
 
   /// The queue containing multiframes with completely detected frames.
   okvis::threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::MultiFrame> > keypointMeasurements_;
+  okvis::threadsafe::ThreadSafeQueue<std::vector<std::shared_ptr<MarkerMeasurement> > > markerMeasurements_;
   /// The queue containing multiframes with completely matched frames. These are already part of the estimator state.
   okvis::threadsafe::ThreadSafeQueue<std::shared_ptr<okvis::MultiFrame>> matchedFrames_;
   /// \brief The IMU measurements.
@@ -366,6 +399,8 @@ class ThreadedKFVio : public VioInterface {
   /// \brief The Position measurements.
   /// \warning Lock with positionMeasurements_mutex_.
   okvis::PositionMeasurementDeque positionMeasurements_;
+  /// \warning Lock with gpsPositionMeasurements_mutex_.
+  okvis::GpsPositionMeasurementDeque gpsPositionMeasurements_;
   /// The queue containing the results of the optimization or IMU propagation ready for publishing.
   okvis::threadsafe::ThreadSafeQueue<OptimizationResults> optimizationResults_;
   /// The queue containing visualization data that is ready to be displayed.
@@ -379,6 +414,7 @@ class ThreadedKFVio : public VioInterface {
 
   std::mutex imuMeasurements_mutex_;      ///< Lock when accessing imuMeasurements_
   std::mutex positionMeasurements_mutex_;      ///< Lock when accessing imuMeasurements_
+  std::mutex gpsPositionMeasurements_mutex_;      ///< Lock when accessing imuMeasurements_
   std::mutex frameSynchronizer_mutex_;    ///< Lock when accessing the frameSynchronizer_.
   std::mutex estimator_mutex_;            ///< Lock when accessing the estimator_.
   ///< Condition variable to signalise that optimization is done.
@@ -386,6 +422,7 @@ class ThreadedKFVio : public VioInterface {
   /// Boolean flag for whether optimization is done for the last state that has been added to the estimator.
   std::atomic_bool optimizationDone_;
   std::mutex lastState_mutex_;            ///< Lock when accessing any of the 'lastOptimized*' variables.
+  std::mutex trackerPrediction_mutex_;
 
   /// @}
   /// @name Consumer threads
@@ -435,6 +472,9 @@ class ThreadedKFVio : public VioInterface {
 
   /// Max position measurements before dropping.
   const size_t maxPositionInputQueueSize_ = 10;
+
+  /// Max GPS position measurements before dropping.
+  const size_t maxGpsPositionInputQueueSize_ = 10;
   
 };
 
